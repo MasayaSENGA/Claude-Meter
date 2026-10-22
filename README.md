@@ -61,3 +61,7 @@ build.bat
 - ログイン情報は Claude Code CLI と共有しています。トークンの更新が Claude Code と同時に起きると、どちらかで再ログインが必要になる場合があります。
 - リフレッシュトークンも期限切れになった場合は、`claude` で `/login` し直してください。
 - トークンは `api.anthropic.com`（使用状況の取得）と `platform.claude.com`（トークン更新）以外には送信しません。
+
+## ライセンス
+
+[MIT License](LICENSE)
