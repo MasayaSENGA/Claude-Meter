@@ -32,7 +32,10 @@ namespace ClaudeMeter
                 if (args.Length >= 3 && args[1] == "--snapshot-settings")
                 {
                     // 設定画面を PNG に保存して終了する（動作確認用）
-                    var f = new SettingsForm(Settings.Load(), false);
+                    // 4つ目・5つ目の引数で開く位置（モニター）を指定できる
+                    var at = Point.Empty;
+                    if (args.Length >= 5) at = new Point(int.Parse(args[3]), int.Parse(args[4]));
+                    var f = new SettingsForm(Settings.Load(), false, at);
                     f.Shown += delegate
                     {
                         using (var bmp = new Bitmap(f.Width, f.Height))
@@ -530,40 +533,96 @@ namespace ClaudeMeter
     // ---------- 設定画面 ----------
     class SettingsForm : Form
     {
-        readonly NumericUpDown refresh = new NumericUpDown { Minimum = 1, Maximum = 60, Width = 70 };
-        readonly ComboBox timeZone = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 400, DropDownWidth = 520 };
-        readonly DateTimePicker peakStart = TimePicker();
-        readonly DateTimePicker peakEnd = TimePicker();
-        readonly CheckBox weekdaysOnly = new CheckBox { Text = "平日のみ（土日はオフピーク）", AutoSize = true };
-        readonly Label localPeak = new Label { AutoSize = true, ForeColor = SystemColors.GrayText };
-        readonly RadioButton styleBar = new RadioButton { Text = "バー", AutoSize = true };
-        readonly RadioButton styleGauge = new RadioButton { Text = "スピードメーター", AutoSize = true };
-        readonly RadioButton layoutHorizontal = new RadioButton { Text = "横並び", AutoSize = true };
-        readonly RadioButton layoutVertical = new RadioButton { Text = "縦並び", AutoSize = true };
-        readonly CheckBox gaugeSweep = new CheckBox { Text = "起動時に針を最大まで振り切る（スイープ）", AutoSize = true };
-        readonly CheckBox showFable = new CheckBox { Text = "週間制限（Fable）を表示", AutoSize = true };
-        readonly CheckBox topMost = new CheckBox { Text = "常に手前に表示", AutoSize = true };
-        readonly TrackBar opacity = new TrackBar { Minimum = 30, Maximum = 100, TickFrequency = 10, SmallChange = 5, LargeChange = 10, Width = 200, AutoSize = false, Height = 30 };
-        readonly Label opacityValue = new Label { AutoSize = true, Anchor = AnchorStyles.Left };
-        readonly CheckBox startup = new CheckBox { Text = "Windows 起動時に開始", AutoSize = true };
+        NumericUpDown refresh;
+        ComboBox timeZone;
+        DateTimePicker peakStart, peakEnd;
+        CheckBox weekdaysOnly, gaugeSweep, showFable, topMost, startup;
+        Label localPeak, opacityValue;
+        RadioButton styleBar, styleGauge, layoutHorizontal, layoutVertical;
+        TrackBar opacity;
+
+        // WinForms の自動スケールはシステム DPI 基準なので、拡大率の違うモニターでは大きさが合わない。
+        // 表示先モニターの拡大率でフォントと寸法を自前で決め、DPI が変わったら組み直す。
+        float scale = 1f;
+        int S(float v) { return (int)Math.Round(v * scale); }
+        Font UiFont(FontStyle style) { return new Font("Yu Gothic UI", 12f * scale, style, GraphicsUnit.Pixel); }
 
         public bool StartupEnabled { get { return startup.Checked; } }
 
-        public SettingsForm(Settings s, bool startupEnabled)
+        // anchor: この位置のモニターの中央に開く（メーターの位置を渡す）
+        public SettingsForm(Settings s, bool startupEnabled, Point anchor)
         {
             Text = "Claude Meter の設定";
-            Font = new Font("Yu Gothic UI", 9f);
-            AutoScaleMode = AutoScaleMode.Font;
+            AutoScaleMode = AutoScaleMode.None;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
-            StartPosition = FormStartPosition.CenterScreen;
+            StartPosition = FormStartPosition.Manual;
             TopMost = true; // 常に手前のメーターの裏に隠れないように
             AutoSize = true;
             AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            Padding = new Padding(12);
 
+            var wa = Screen.FromPoint(anchor).WorkingArea;
+            scale = Dpi.ScaleAt(new Point(wa.Left + wa.Width / 2, wa.Top + wa.Height / 2));
+            BuildUi();
+            LoadValues(s, startupEnabled);
+            var size = PreferredSize;
+            Location = new Point(wa.Left + Math.Max(0, (wa.Width - size.Width) / 2), wa.Top + Math.Max(0, (wa.Height - size.Height) / 2));
+        }
+
+        const int WM_DPICHANGED = 0x02E0;
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WM_DPICHANGED)
+            {
+                int dpi = (int)((long)m.WParam >> 16) & 0xFFFF;
+                float newScale = dpi / 96f;
+                if (Math.Abs(newScale - scale) > 0.01f)
+                {
+                    // 入力中の値を保ったまま新しい拡大率で作り直す
+                    var tmp = new Settings();
+                    ApplyTo(tmp);
+                    bool st = startup.Checked;
+                    var pos = Location;
+                    SuspendLayout();
+                    var old = new List<Control>();
+                    foreach (Control c in Controls) old.Add(c);
+                    Controls.Clear();
+                    foreach (var c in old) c.Dispose();
+                    scale = newScale;
+                    BuildUi();
+                    LoadValues(tmp, st);
+                    ResumeLayout(true);
+                    Location = pos;
+                }
+                return;
+            }
+            base.WndProc(ref m);
+        }
+
+        void BuildUi()
+        {
+            Font = UiFont(FontStyle.Regular);
+            Padding = new Padding(S(12));
+
+            refresh = new NumericUpDown { Minimum = 1, Maximum = 60, Width = S(70) };
+            timeZone = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = S(400), DropDownWidth = S(520) };
             foreach (var tz in TimeZoneInfo.GetSystemTimeZones()) timeZone.Items.Add(new TzItem(tz));
+            peakStart = TimePicker();
+            peakEnd = TimePicker();
+            weekdaysOnly = Check("平日のみ（土日はオフピーク）");
+            localPeak = new Label { AutoSize = true, ForeColor = SystemColors.GrayText };
+            styleBar = Radio("バー");
+            styleGauge = Radio("スピードメーター");
+            layoutHorizontal = Radio("横並び");
+            layoutVertical = Radio("縦並び");
+            gaugeSweep = Check("起動時に針を最大まで振り切る（スイープ）");
+            showFable = Check("週間制限（Fable）を表示");
+            topMost = Check("常に手前に表示");
+            opacity = new TrackBar { Minimum = 30, Maximum = 100, TickFrequency = 10, SmallChange = 5, LargeChange = 10, Width = S(200), AutoSize = false, Height = S(30) };
+            opacityValue = new Label { AutoSize = true, Anchor = AnchorStyles.Left };
+            startup = Check("Windows 起動時に開始");
 
             var table = new TableLayoutPanel { ColumnCount = 2, AutoSize = true, Dock = DockStyle.Fill };
             table.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -587,11 +646,13 @@ namespace ClaudeMeter
             Row(table, "不透明度", Flow(opacity, opacityValue));
             Row(table, "", startup);
 
-            var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, AutoSize = true, MinimumSize = new Size(80, 0) };
-            var cancel = new Button { Text = "キャンセル", DialogResult = DialogResult.Cancel, AutoSize = true, MinimumSize = new Size(80, 0) };
-            var reset = new Button { Text = "既定に戻す", AutoSize = true, MinimumSize = new Size(80, 0) };
+            var ok = DialogButton("OK");
+            ok.DialogResult = DialogResult.OK;
+            var cancel = DialogButton("キャンセル");
+            cancel.DialogResult = DialogResult.Cancel;
+            var reset = DialogButton("既定に戻す");
             reset.Click += delegate { LoadValues(new Settings(), startup.Checked); };
-            var buttons = new FlowLayoutPanel { FlowDirection = FlowDirection.RightToLeft, AutoSize = true, Dock = DockStyle.Fill, Margin = new Padding(0, 12, 0, 0) };
+            var buttons = new FlowLayoutPanel { FlowDirection = FlowDirection.RightToLeft, AutoSize = true, Dock = DockStyle.Fill, Margin = new Padding(0, S(12), 0, 0) };
             buttons.Controls.Add(cancel);
             buttons.Controls.Add(ok);
             buttons.Controls.Add(reset);
@@ -609,8 +670,6 @@ namespace ClaudeMeter
             weekdaysOnly.CheckedChanged += delegate { UpdateLocalPeak(); };
             opacity.ValueChanged += delegate { opacityValue.Text = opacity.Value + "%"; };
             styleGauge.CheckedChanged += delegate { UpdateLayoutEnabled(); };
-
-            LoadValues(s, startupEnabled);
         }
 
         void LoadValues(Settings s, bool startupEnabled)
@@ -686,14 +745,30 @@ namespace ClaudeMeter
             return TimeSpan.Zero;
         }
 
-        static DateTimePicker TimePicker()
+        DateTimePicker TimePicker()
         {
-            return new DateTimePicker { Format = DateTimePickerFormat.Custom, CustomFormat = "HH:mm", ShowUpDown = true, Width = 90 };
+            return new DateTimePicker { Format = DateTimePickerFormat.Custom, CustomFormat = "HH:mm", ShowUpDown = true, Width = S(90) };
         }
 
-        static Label Caption(string text)
+        // チェックボックス等は FlatStyle.System にして Windows に描かせる（印の大きさもモニターに合う）
+        static CheckBox Check(string text)
         {
-            return new Label { Text = text, AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 6, 3, 0) };
+            return new CheckBox { Text = text, AutoSize = true, FlatStyle = FlatStyle.System };
+        }
+
+        static RadioButton Radio(string text)
+        {
+            return new RadioButton { Text = text, AutoSize = true, FlatStyle = FlatStyle.System };
+        }
+
+        Button DialogButton(string text)
+        {
+            return new Button { Text = text, AutoSize = true, FlatStyle = FlatStyle.System, MinimumSize = new Size(S(80), 0) };
+        }
+
+        Label Caption(string text)
+        {
+            return new Label { Text = text, AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(S(3), S(6), S(3), 0) };
         }
 
         static FlowLayoutPanel Flow(params Control[] controls)
@@ -703,17 +778,17 @@ namespace ClaudeMeter
             return p;
         }
 
-        static void Section(TableLayoutPanel t, string title)
+        void Section(TableLayoutPanel t, string title)
         {
-            var l = new Label { Text = title, AutoSize = true, Font = new Font("Yu Gothic UI", 9f, FontStyle.Bold), Margin = new Padding(0, t.RowCount == 0 ? 0 : 12, 0, 4) };
+            var l = new Label { Text = title, AutoSize = true, Font = UiFont(FontStyle.Bold), Margin = new Padding(0, t.RowCount == 0 ? 0 : S(12), 0, S(4)) };
             t.Controls.Add(l, 0, t.RowCount);
             t.SetColumnSpan(l, 2);
             t.RowCount++;
         }
 
-        static void Row(TableLayoutPanel t, string label, Control c)
+        void Row(TableLayoutPanel t, string label, Control c)
         {
-            t.Controls.Add(new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(12, 6, 12, 0) }, 0, t.RowCount);
+            t.Controls.Add(new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(S(12), S(6), S(12), 0) }, 0, t.RowCount);
             c.Anchor = AnchorStyles.Left;
             t.Controls.Add(c, 1, t.RowCount);
             t.RowCount++;
@@ -795,8 +870,8 @@ namespace ClaudeMeter
             return x < 0.5 ? 4 * x * x * x : 1 - Math.Pow(-2 * x + 2, 3) / 2; // easeInOutCubic
         }
         readonly NotifyIcon tray = new NotifyIcon();
-        readonly ToolStripMenuItem topMostItem;
-        readonly ToolStripMenuItem startupItem;
+        readonly MenuItem topMostItem;
+        readonly MenuItem startupItem;
         UsageResult last;
         bool fetching;
         Point dragStart;
@@ -904,23 +979,25 @@ namespace ClaudeMeter
             ClientSize = new Size(S(BaseWidth), S(BaseHeight));
             Location = onScreen ? pos : new Point(wa.Right - Width - S(16), wa.Bottom - Height - S(16));
 
-            var menu = new ContextMenuStrip();
-            menu.Items.Add("今すぐ更新", null, delegate { Refresh_(); });
-            topMostItem = new ToolStripMenuItem("常に手前に表示", null, delegate { ToggleTopMost(); });
+            // ContextMenuStrip はシステム DPI 固定で描かれ、拡大率の違うモニターで大きさが合わない。
+            // ネイティブメニューは表示先モニターの拡大率に合わせて Windows が描く。
+            var menu = new ContextMenu();
+            menu.MenuItems.Add("今すぐ更新", delegate { Refresh_(); });
+            topMostItem = new MenuItem("常に手前に表示", delegate { ToggleTopMost(); });
             topMostItem.Checked = settings.TopMost;
-            menu.Items.Add(topMostItem);
-            startupItem = new ToolStripMenuItem("Windows 起動時に開始", null, delegate { ToggleStartup(); });
+            menu.MenuItems.Add(topMostItem);
+            startupItem = new MenuItem("Windows 起動時に開始", delegate { ToggleStartup(); });
             startupItem.Checked = IsStartupEnabled();
-            menu.Items.Add(startupItem);
-            menu.Items.Add("表示／非表示", null, delegate { ToggleVisible(); });
-            menu.Items.Add("設定...", null, delegate { ShowSettings(); });
-            menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("終了", null, delegate { Close(); });
-            ContextMenuStrip = menu;
+            menu.MenuItems.Add(startupItem);
+            menu.MenuItems.Add("表示／非表示", delegate { ToggleVisible(); });
+            menu.MenuItems.Add("設定...", delegate { ShowSettings(); });
+            menu.MenuItems.Add("-");
+            menu.MenuItems.Add("終了", delegate { Close(); });
+            ContextMenu = menu;
 
             tray.Icon = Icon;
             tray.Text = "Claude Meter";
-            tray.ContextMenuStrip = menu;
+            tray.ContextMenu = menu;
             tray.Visible = true;
             tray.MouseClick += delegate(object s, MouseEventArgs e) { if (e.Button == MouseButtons.Left) ToggleVisible(); };
 
@@ -1235,7 +1312,7 @@ namespace ClaudeMeter
         void ShowSettings()
         {
             if (settingsForm != null) { settingsForm.Activate(); return; }
-            using (settingsForm = new SettingsForm(settings, IsStartupEnabled()))
+            using (settingsForm = new SettingsForm(settings, IsStartupEnabled(), new Point(Left + Width / 2, Top + Height / 2)))
             {
                 if (settingsForm.ShowDialog() == DialogResult.OK)
                 {
