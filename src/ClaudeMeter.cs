@@ -67,6 +67,7 @@ namespace ClaudeMeter
         public string Style = "bar"; // "bar" または "gauge"（スピードメーター）
         public bool GaugeVertical = false; // スピードメーターを縦に並べる
         public bool ShowFable = true; // Fable を使えないプランでは非表示にできる
+        public bool GaugeSweep = true; // スピードメーター表示で起動時に針をスイープさせる
         public int X = -1;
         public int Y = -1;
 
@@ -94,6 +95,7 @@ namespace ClaudeMeter
                     if (d.TryGetValue("style", out v)) s.Style = Convert.ToString(v) == "gauge" ? "gauge" : "bar";
                     if (d.TryGetValue("gaugeVertical", out v)) s.GaugeVertical = Convert.ToBoolean(v);
                     if (d.TryGetValue("showFable", out v)) s.ShowFable = Convert.ToBoolean(v);
+                    if (d.TryGetValue("gaugeSweep", out v)) s.GaugeSweep = Convert.ToBoolean(v);
                     if (d.TryGetValue("opacity", out v)) s.Opacity = Math.Min(1.0, Math.Max(0.3, Convert.ToDouble(v, CultureInfo.InvariantCulture)));
                     if (d.TryGetValue("x", out v)) s.X = Convert.ToInt32(v);
                     if (d.TryGetValue("y", out v)) s.Y = Convert.ToInt32(v);
@@ -118,6 +120,7 @@ namespace ClaudeMeter
                 d["style"] = Style;
                 d["gaugeVertical"] = GaugeVertical;
                 d["showFable"] = ShowFable;
+                d["gaugeSweep"] = GaugeSweep;
                 d["topMost"] = TopMost;
                 d["opacity"] = Opacity;
                 d["x"] = X;
@@ -537,6 +540,7 @@ namespace ClaudeMeter
         readonly RadioButton styleGauge = new RadioButton { Text = "スピードメーター", AutoSize = true };
         readonly RadioButton layoutHorizontal = new RadioButton { Text = "横並び", AutoSize = true };
         readonly RadioButton layoutVertical = new RadioButton { Text = "縦並び", AutoSize = true };
+        readonly CheckBox gaugeSweep = new CheckBox { Text = "起動時に針を最大まで振り切る（スイープ）", AutoSize = true };
         readonly CheckBox showFable = new CheckBox { Text = "週間制限（Fable）を表示", AutoSize = true };
         readonly CheckBox topMost = new CheckBox { Text = "常に手前に表示", AutoSize = true };
         readonly TrackBar opacity = new TrackBar { Minimum = 30, Maximum = 100, TickFrequency = 10, SmallChange = 5, LargeChange = 10, Width = 200, AutoSize = false, Height = 30 };
@@ -577,6 +581,7 @@ namespace ClaudeMeter
             Section(table, "表示");
             Row(table, "表示形式", Flow(styleBar, styleGauge));
             Row(table, "メーターの並び", Flow(layoutHorizontal, layoutVertical));
+            Row(table, "", gaugeSweep);
             Row(table, "", showFable);
             Row(table, "", topMost);
             Row(table, "不透明度", Flow(opacity, opacityValue));
@@ -623,6 +628,7 @@ namespace ClaudeMeter
             layoutVertical.Checked = s.GaugeVertical;
             layoutHorizontal.Checked = !s.GaugeVertical;
             showFable.Checked = s.ShowFable;
+            gaugeSweep.Checked = s.GaugeSweep;
             UpdateLayoutEnabled();
             topMost.Checked = s.TopMost;
             opacity.Value = (int)Math.Round(Math.Min(1.0, Math.Max(0.3, s.Opacity)) * 100);
@@ -642,14 +648,15 @@ namespace ClaudeMeter
             s.Style = styleGauge.Checked ? "gauge" : "bar";
             s.GaugeVertical = layoutVertical.Checked;
             s.ShowFable = showFable.Checked;
+            s.GaugeSweep = gaugeSweep.Checked;
             s.TopMost = topMost.Checked;
             s.Opacity = opacity.Value / 100.0;
         }
 
-        // 並びの指定はスピードメーターのときだけ意味がある
+        // 並びとスイープの指定はスピードメーターのときだけ意味がある
         void UpdateLayoutEnabled()
         {
-            layoutHorizontal.Enabled = layoutVertical.Enabled = styleGauge.Checked;
+            layoutHorizontal.Enabled = layoutVertical.Enabled = gaugeSweep.Enabled = styleGauge.Checked;
         }
 
         // 選んだタイムゾーンの時間帯が、この PC の時刻で今日何時になるかを示す
@@ -746,6 +753,46 @@ namespace ClaudeMeter
         readonly Settings settings;
         readonly Timer refreshTimer = new Timer();
         readonly Timer clockTimer = new Timer();
+
+        // 起動時のスイープ（針が一度最大まで振り切ってから実際の値に戻る）
+        readonly Timer sweepTimer = new Timer { Interval = 15 };
+        readonly System.Diagnostics.Stopwatch sweepClock = new System.Diagnostics.Stopwatch();
+        bool sweeping;
+        const double SweepUp = 0.7, SweepHold = 0.2, SweepDown = 0.8; // 秒
+
+        void StartSweep()
+        {
+            if (!IsGauge || !settings.GaugeSweep || snapshotPath != null) return;
+            sweeping = true;
+            sweepClock.Restart();
+            sweepTimer.Start();
+        }
+
+        void OnSweepTick(object sender, EventArgs e)
+        {
+            if (sweepClock.Elapsed.TotalSeconds >= SweepUp + SweepHold + SweepDown)
+            {
+                sweeping = false;
+                sweepTimer.Stop();
+                sweepClock.Stop();
+            }
+            Invalidate();
+        }
+
+        // 経過時間に応じた針の位置。上りは 0→100%、下りは 100%→target
+        double SweepValue(double target)
+        {
+            double t = sweepClock.Elapsed.TotalSeconds;
+            if (t < SweepUp) return 100 * Ease(t / SweepUp);
+            if (t < SweepUp + SweepHold) return 100;
+            double k = Math.Min(1, (t - SweepUp - SweepHold) / SweepDown);
+            return 100 + (target - 100) * Ease(k);
+        }
+
+        static double Ease(double x)
+        {
+            return x < 0.5 ? 4 * x * x * x : 1 - Math.Pow(-2 * x + 2, 3) / 2; // easeInOutCubic
+        }
         readonly NotifyIcon tray = new NotifyIcon();
         readonly ToolStripMenuItem topMostItem;
         readonly ToolStripMenuItem startupItem;
@@ -889,7 +936,8 @@ namespace ClaudeMeter
             clockTimer.Tick += delegate { Invalidate(); UpdateTrayText(); };
             clockTimer.Start();
 
-            Shown += delegate { Refresh_(); };
+            sweepTimer.Tick += OnSweepTick;
+            Shown += delegate { StartSweep(); Refresh_(); };
         }
 
         protected override CreateParams CreateParams
@@ -1031,6 +1079,8 @@ namespace ClaudeMeter
         {
             bool has = win != null && win.Present;
             double pct = has ? Math.Max(0, Math.Min(100, win.Utilization)) : 0;
+            bool lit = has || sweeping; // スイープ中はデータ未取得でも文字盤を点灯させる
+            if (sweeping) pct = SweepValue(pct);
             float r = S(44);
             float cx = x + cw / 2f, cy = y + r + S(4);
             var dial = new RectangleF(cx - r, cy - r, r * 2, r * 2);
@@ -1042,8 +1092,9 @@ namespace ClaudeMeter
             using (var p = new Pen(Color.FromArgb(170, Theme.Danger), S(2))) g.DrawArc(p, zone, Angle(90), GaugeSweep * 0.1f);
 
             using (var p = new Pen(Theme.Track, S(7))) g.DrawArc(p, dial, GaugeStart, GaugeSweep);
-            if (has && pct > 0)
-                using (var p = new Pen(Theme.ForPercent(pct), S(7))) g.DrawArc(p, dial, GaugeStart, (float)(GaugeSweep * pct / 100));
+            float valueSweep = (float)(GaugeSweep * pct / 100);
+            if (lit && valueSweep >= 0.5f) // GDI+ は極小角度の DrawArc で例外を出すことがある
+                using (var p = new Pen(Theme.ForPercent(pct), S(7))) g.DrawArc(p, dial, GaugeStart, valueSweep);
 
             // 10% ごとの目盛り（0・50・100% は長く）
             for (int i = 0; i <= 10; i++)
@@ -1058,15 +1109,15 @@ namespace ClaudeMeter
             // 針
             double na = Angle(pct) * Math.PI / 180;
             float nl = r - S(13);
-            using (var p = new Pen(has ? Theme.Text : Theme.Sub, Math.Max(2, S(2.5f))))
+            using (var p = new Pen(lit ? Theme.Text : Theme.Sub, Math.Max(2, S(2.5f))))
             {
                 p.StartCap = LineCap.Round; p.EndCap = LineCap.Round;
                 g.DrawLine(p, cx, cy, cx + (float)Math.Cos(na) * nl, cy + (float)Math.Sin(na) * nl);
             }
             float hub = S(5);
-            using (var b = new SolidBrush(has ? Theme.ForPercent(pct) : Theme.Sub)) g.FillEllipse(b, cx - hub, cy - hub, hub * 2, hub * 2);
+            using (var b = new SolidBrush(lit ? Theme.ForPercent(pct) : Theme.Sub)) g.FillEllipse(b, cx - hub, cy - hub, hub * 2, hub * 2);
 
-            DrawCenter(g, has ? Math.Round(pct).ToString("0") + "%" : "—", pctFont, has ? Theme.ForPercent(pct) : Theme.Sub, cx, cy + S(12));
+            DrawCenter(g, lit ? Math.Round(pct).ToString("0") + "%" : "—", pctFont, lit ? Theme.ForPercent(pct) : Theme.Sub, cx, cy + S(12));
             DrawCenter(g, label, labelFont, Theme.Text, cx, cy + S(32));
             if (win != null)
             {
@@ -1187,6 +1238,7 @@ namespace ClaudeMeter
             {
                 if (settingsForm.ShowDialog() == DialogResult.OK)
                 {
+                    bool wasGauge = IsGauge;
                     settingsForm.ApplyTo(settings);
                     settings.Save();
                     refreshTimer.Interval = settings.RefreshMinutes * 60 * 1000;
@@ -1195,6 +1247,7 @@ namespace ClaudeMeter
                     Opacity = settings.Opacity;
                     ClientSize = new Size(S(BaseWidth), S(BaseHeight));
                     KeepOnScreen();
+                    if (!wasGauge && IsGauge) StartSweep();
                     if (settingsForm.StartupEnabled != IsStartupEnabled()) SetStartup(settingsForm.StartupEnabled);
                     Invalidate();
                 }
