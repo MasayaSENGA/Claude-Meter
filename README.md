@@ -74,6 +74,10 @@ build.bat
 - リフレッシュトークンも期限切れになった場合は、`claude` で `/login` し直してください。
 - トークンは `api.anthropic.com`（使用状況の取得）と `platform.claude.com`（トークン更新）以外には送信しません。
 
+## Mac 版について
+
+Mac 版はまだありません。移植するための仕様は [docs/PORTING-mac.md](docs/PORTING-mac.md) にまとめています。
+
 ## ライセンス
 
 [MIT License](LICENSE)
