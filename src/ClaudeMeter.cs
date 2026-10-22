@@ -734,7 +734,8 @@ namespace ClaudeMeter
         public static readonly Color Track = Color.FromArgb(58, 58, 62);
         public static readonly Color Text = Color.FromArgb(235, 235, 235);
         public static readonly Color Sub = Color.FromArgb(150, 150, 155);
-        public static readonly Color Ok = Color.FromArgb(217, 119, 87);   // Claude 系のオレンジ
+        public static readonly Color Brand = Color.FromArgb(217, 119, 87); // アイコン用の Claude 系オレンジ
+        public static readonly Color Ok = Color.FromArgb(70, 150, 230);    // 70% 未満は青
         public static readonly Color Warn = Color.FromArgb(230, 180, 60);
         public static readonly Color Danger = Color.FromArgb(225, 80, 80);
         public static readonly Color Peak = Color.FromArgb(225, 95, 80);
@@ -1297,7 +1298,7 @@ namespace ClaudeMeter
                 using (var g = Graphics.FromImage(bmp))
                 {
                     g.SmoothingMode = SmoothingMode.AntiAlias;
-                    using (var b = new SolidBrush(Theme.Ok)) g.FillEllipse(b, 1, 1, 30, 30);
+                    using (var b = new SolidBrush(Theme.Brand)) g.FillEllipse(b, 1, 1, 30, 30);
                     using (var p = new Pen(Color.White, 4f))
                     {
                         p.StartCap = LineCap.Round; p.EndCap = LineCap.Round;
