@@ -1,6 +1,6 @@
 # Claude Meter
 
-Claude の利用制限の使用状況を、デスクトップの隅に小さく常時表示する Windows アプリです。
+Claude の利用制限の使用状況を、デスクトップの隅に小さく常時表示する Windows / Mac アプリです（Mac 版は下の「Mac 版」を参照）。
 
 - 5時間制限の使用率とリセット時刻
 - 週間制限（全モデル）の使用率とリセット時刻
@@ -74,9 +74,49 @@ build.bat
 - リフレッシュトークンも期限切れになった場合は、`claude` で `/login` し直してください。
 - トークンは `api.anthropic.com`（使用状況の取得）と `platform.claude.com`（トークン更新）以外には送信しません。
 
-## Mac 版について
+## Mac 版
 
-Mac 版はまだありません。移植するための仕様は [docs/PORTING-mac.md](docs/PORTING-mac.md) にまとめています。
+`mac/` に Swift（AppKit）で作った Mac 版があります。機能・表示・設定項目は Windows 版と同じです。macOS 13 以降で動きます。
+
+### ビルド
+
+Xcode か Command Line Tools（`xcode-select --install`）の `swiftc` でビルドします。管理者権限は要りません。
+
+```bash
+mac/build.sh
+```
+
+`mac/build/ClaudeMeter.app` が作られます（Apple シリコン・Intel 両対応）。好きな場所（`~/Applications` など）に置いて開いてください。署名はその場限りの ad-hoc 署名なので、別の Mac にコピーした場合は Gatekeeper に止められます。そのときは右クリック →「開く」で起動してください。
+
+### Windows 版との違い
+
+| 項目 | Mac 版 |
+|---|---|
+| ログイン情報 | キーチェーンの「Claude Code-credentials」（Claude Code CLI が保存する場所）。無ければ `~/.claude/.credentials.json`。キーチェーンは `/usr/bin/security` 経由で読み書きするので、許可ダイアログは出ません |
+| タスクトレイ | メニューバーのアイコン（クリックでメニュー、カーソルを当てると使用率） |
+| 自動起動 | メニューの「ログイン時に開始」（`SMAppService` で登録。システム設定の「ログイン項目」にも出ます） |
+| 設定の保存先 | `~/Library/Application Support/ClaudeMeter/settings.json`（キー名は Windows 版と同じ。`x` / `y` はウィンドウ左上の画面座標） |
+| Dock | 表示しません |
+
+### 動作確認用のオプション
+
+描画を PNG に保存して終了します（設定ファイルは書き換えません）。
+
+```bash
+mac/build/ClaudeMeter.app/Contents/MacOS/ClaudeMeter --snapshot out.png --style gauge,vertical --sample usage.json --sweep 1.0
+```
+
+| オプション | 内容 |
+|---|---|
+| `--style <形式>` | `bar` / `gauge` に `vertical`、`nofable` をカンマでつなげて指定 |
+| `--sample <JSON>` | 実際に取得せず、usage API の応答を保存したファイルを使う |
+| `--nodata` | 取得せずに描く（データ未取得の状態） |
+| `--error <文言>` | エラー行を表示する |
+| `--sweep <秒>` | スイープのその時点のコマを描く |
+| `--now <ISO 8601>` | 現在時刻を差し替える（ピーク表示や残り時間の確認用） |
+| `--scale <倍率>` | 出力の倍率（既定 2） |
+
+`--snapshot-settings <パス>` で設定画面も保存できます。移植のための仕様は [docs/PORTING-mac.md](docs/PORTING-mac.md) にあります。
 
 ## ライセンス
 

@@ -54,9 +54,9 @@ User-Agent: ClaudeMeter/1.0
 ### 2.3 ログイン情報（macOS で一番の違い）
 
 - Windows / Linux の Claude Code は `~/.claude/.credentials.json`（環境変数 `CLAUDE_CONFIG_DIR` があればそのフォルダ）に保存する。
-- **macOS の Claude Code はキーチェーンに保存する。** 汎用パスワード項目で、サービス名は `Claude Code-credentials` のはず（**要確認**: `security find-generic-password -s "Claude Code-credentials"` で項目があるか確かめる。値は表示しないこと）。中身は下と同じ JSON 文字列と想定している。
+- **macOS の Claude Code はキーチェーンに保存する。** 汎用パスワード項目で、サービス名は `Claude Code-credentials`、アカウント名は macOS のユーザー名（Claude Code 2.1 系で確認済み）。中身は下と同じ JSON 文字列。項目は `/usr/bin/security` が作っているので、同じコマンド経由で読み書きすれば許可ダイアログは出ない（Mac 版はそうしている）。
 - キーチェーンに無ければ `~/.claude/.credentials.json` も見る。
-- 初回のキーチェーン読み取りでは、許可を求めるダイアログが出る。
+- Security.framework で直接読むと、初回に許可を求めるダイアログが出る（ad-hoc 署名のアプリはビルドし直すたびに出る）。
 
 ```json
 {
