@@ -29,6 +29,22 @@ namespace ClaudeMeter
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 var args = Environment.GetCommandLineArgs();
+                if (args.Length >= 3 && args[1] == "--snapshot-settings")
+                {
+                    // 設定画面を PNG に保存して終了する（動作確認用）
+                    var f = new SettingsForm(Settings.Load(), false);
+                    f.Shown += delegate
+                    {
+                        using (var bmp = new Bitmap(f.Width, f.Height))
+                        {
+                            f.DrawToBitmap(bmp, new Rectangle(Point.Empty, f.Size));
+                            bmp.Save(args[2], System.Drawing.Imaging.ImageFormat.Png);
+                        }
+                        f.Close();
+                    };
+                    Application.Run(f);
+                    return;
+                }
                 string snapshot = args.Length >= 3 && args[1] == "--snapshot" ? args[2] : null;
                 float forcedScale = 0;
                 if (snapshot != null && args.Length >= 4) float.TryParse(args[3], NumberStyles.Float, CultureInfo.InvariantCulture, out forcedScale);
@@ -99,11 +115,6 @@ namespace ClaudeMeter
                 File.WriteAllText(FilePath, PrettyJson(new JavaScriptSerializer().Serialize(d)), new UTF8Encoding(false));
             }
             catch { }
-        }
-
-        public static void OpenInEditor()
-        {
-            try { System.Diagnostics.Process.Start("notepad.exe", "\"" + FilePath + "\""); } catch { }
         }
 
         static string PrettyJson(string json)
@@ -503,6 +514,178 @@ namespace ClaudeMeter
         }
     }
 
+    // ---------- 設定画面 ----------
+    class SettingsForm : Form
+    {
+        readonly NumericUpDown refresh = new NumericUpDown { Minimum = 1, Maximum = 60, Width = 70 };
+        readonly ComboBox timeZone = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 400, DropDownWidth = 520 };
+        readonly DateTimePicker peakStart = TimePicker();
+        readonly DateTimePicker peakEnd = TimePicker();
+        readonly CheckBox weekdaysOnly = new CheckBox { Text = "平日のみ（土日はオフピーク）", AutoSize = true };
+        readonly Label localPeak = new Label { AutoSize = true, ForeColor = SystemColors.GrayText };
+        readonly CheckBox topMost = new CheckBox { Text = "常に手前に表示", AutoSize = true };
+        readonly TrackBar opacity = new TrackBar { Minimum = 30, Maximum = 100, TickFrequency = 10, SmallChange = 5, LargeChange = 10, Width = 200, AutoSize = false, Height = 30 };
+        readonly Label opacityValue = new Label { AutoSize = true, Anchor = AnchorStyles.Left };
+        readonly CheckBox startup = new CheckBox { Text = "Windows 起動時に開始", AutoSize = true };
+
+        public bool StartupEnabled { get { return startup.Checked; } }
+
+        public SettingsForm(Settings s, bool startupEnabled)
+        {
+            Text = "Claude Meter の設定";
+            Font = new Font("Yu Gothic UI", 9f);
+            AutoScaleMode = AutoScaleMode.Font;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            StartPosition = FormStartPosition.CenterScreen;
+            TopMost = true; // 常に手前のメーターの裏に隠れないように
+            AutoSize = true;
+            AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            Padding = new Padding(12);
+
+            foreach (var tz in TimeZoneInfo.GetSystemTimeZones()) timeZone.Items.Add(new TzItem(tz));
+
+            var table = new TableLayoutPanel { ColumnCount = 2, AutoSize = true, Dock = DockStyle.Fill };
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+            Section(table, "更新");
+            Row(table, "更新間隔", Flow(refresh, Caption("分ごと")));
+
+            Section(table, "ピークタイム");
+            Row(table, "基準タイムゾーン", timeZone);
+            Row(table, "時間帯", Flow(peakStart, Caption("〜"), peakEnd));
+            Row(table, "", weekdaysOnly);
+            Row(table, "", localPeak);
+
+            Section(table, "表示");
+            Row(table, "", topMost);
+            Row(table, "不透明度", Flow(opacity, opacityValue));
+            Row(table, "", startup);
+
+            var ok = new Button { Text = "OK", DialogResult = DialogResult.OK, AutoSize = true, MinimumSize = new Size(80, 0) };
+            var cancel = new Button { Text = "キャンセル", DialogResult = DialogResult.Cancel, AutoSize = true, MinimumSize = new Size(80, 0) };
+            var reset = new Button { Text = "既定に戻す", AutoSize = true, MinimumSize = new Size(80, 0) };
+            reset.Click += delegate { LoadValues(new Settings(), startup.Checked); };
+            var buttons = new FlowLayoutPanel { FlowDirection = FlowDirection.RightToLeft, AutoSize = true, Dock = DockStyle.Fill, Margin = new Padding(0, 12, 0, 0) };
+            buttons.Controls.Add(cancel);
+            buttons.Controls.Add(ok);
+            buttons.Controls.Add(reset);
+            table.Controls.Add(buttons, 0, table.RowCount);
+            table.SetColumnSpan(buttons, 2);
+            table.RowCount++;
+
+            Controls.Add(table);
+            AcceptButton = ok;
+            CancelButton = cancel;
+
+            timeZone.SelectedIndexChanged += delegate { UpdateLocalPeak(); };
+            peakStart.ValueChanged += delegate { UpdateLocalPeak(); };
+            peakEnd.ValueChanged += delegate { UpdateLocalPeak(); };
+            weekdaysOnly.CheckedChanged += delegate { UpdateLocalPeak(); };
+            opacity.ValueChanged += delegate { opacityValue.Text = opacity.Value + "%"; };
+
+            LoadValues(s, startupEnabled);
+        }
+
+        void LoadValues(Settings s, bool startupEnabled)
+        {
+            refresh.Value = Math.Max(refresh.Minimum, Math.Min(refresh.Maximum, s.RefreshMinutes));
+            timeZone.SelectedIndex = -1;
+            for (int i = 0; i < timeZone.Items.Count; i++)
+                if (((TzItem)timeZone.Items[i]).Zone.Id == s.PeakTimeZone) timeZone.SelectedIndex = i;
+            if (timeZone.SelectedIndex < 0 && timeZone.Items.Count > 0) timeZone.SelectedIndex = 0;
+            peakStart.Value = DateTime.Today + ParseTime(s.PeakStart);
+            peakEnd.Value = DateTime.Today + ParseTime(s.PeakEnd);
+            weekdaysOnly.Checked = s.PeakWeekdaysOnly;
+            topMost.Checked = s.TopMost;
+            opacity.Value = (int)Math.Round(Math.Min(1.0, Math.Max(0.3, s.Opacity)) * 100);
+            opacityValue.Text = opacity.Value + "%";
+            startup.Checked = startupEnabled;
+            UpdateLocalPeak();
+        }
+
+        public void ApplyTo(Settings s)
+        {
+            s.RefreshMinutes = (int)refresh.Value;
+            var tz = timeZone.SelectedItem as TzItem;
+            if (tz != null) s.PeakTimeZone = tz.Zone.Id;
+            s.PeakStart = peakStart.Value.ToString("HH:mm", CultureInfo.InvariantCulture);
+            s.PeakEnd = peakEnd.Value.ToString("HH:mm", CultureInfo.InvariantCulture);
+            s.PeakWeekdaysOnly = weekdaysOnly.Checked;
+            s.TopMost = topMost.Checked;
+            s.Opacity = opacity.Value / 100.0;
+        }
+
+        // 選んだタイムゾーンの時間帯が、この PC の時刻で今日何時になるかを示す
+        void UpdateLocalPeak()
+        {
+            var tz = timeZone.SelectedItem as TzItem;
+            if (tz == null) { localPeak.Text = ""; return; }
+            DateTime todayThere = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, tz.Zone).Date;
+            DateTime s = ToLocal(todayThere + peakStart.Value.TimeOfDay, tz.Zone);
+            DateTime e = ToLocal(todayThere + peakEnd.Value.TimeOfDay, tz.Zone);
+            if (e <= s) e = e.AddDays(1);
+            localPeak.Text = "この PC の時刻では " + s.ToString("HH:mm") + "〜" + (e.Date > s.Date ? "翌" : "") + e.ToString("HH:mm")
+                + (weekdaysOnly.Checked ? "（基準タイムゾーンの平日のみ）" : "（毎日）");
+        }
+
+        static DateTime ToLocal(DateTime there, TimeZoneInfo tz)
+        {
+            var unspecified = DateTime.SpecifyKind(there, DateTimeKind.Unspecified);
+            if (tz.IsInvalidTime(unspecified)) unspecified = unspecified.AddHours(1); // 夏時間開始の欠けた時刻
+            return TimeZoneInfo.ConvertTimeToUtc(unspecified, tz).ToLocalTime();
+        }
+
+        static TimeSpan ParseTime(string s)
+        {
+            TimeSpan t;
+            if (TimeSpan.TryParseExact(s ?? "", @"h\:mm", CultureInfo.InvariantCulture, out t)) return t;
+            return TimeSpan.Zero;
+        }
+
+        static DateTimePicker TimePicker()
+        {
+            return new DateTimePicker { Format = DateTimePickerFormat.Custom, CustomFormat = "HH:mm", ShowUpDown = true, Width = 90 };
+        }
+
+        static Label Caption(string text)
+        {
+            return new Label { Text = text, AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 6, 3, 0) };
+        }
+
+        static FlowLayoutPanel Flow(params Control[] controls)
+        {
+            var p = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0) };
+            p.Controls.AddRange(controls);
+            return p;
+        }
+
+        static void Section(TableLayoutPanel t, string title)
+        {
+            var l = new Label { Text = title, AutoSize = true, Font = new Font("Yu Gothic UI", 9f, FontStyle.Bold), Margin = new Padding(0, t.RowCount == 0 ? 0 : 12, 0, 4) };
+            t.Controls.Add(l, 0, t.RowCount);
+            t.SetColumnSpan(l, 2);
+            t.RowCount++;
+        }
+
+        static void Row(TableLayoutPanel t, string label, Control c)
+        {
+            t.Controls.Add(new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(12, 6, 12, 0) }, 0, t.RowCount);
+            c.Anchor = AnchorStyles.Left;
+            t.Controls.Add(c, 1, t.RowCount);
+            t.RowCount++;
+        }
+
+        class TzItem
+        {
+            public readonly TimeZoneInfo Zone;
+            public TzItem(TimeZoneInfo z) { Zone = z; }
+            public override string ToString() { return Zone.DisplayName; }
+        }
+    }
+
     // ---------- 表示 ----------
     static class Theme
     {
@@ -616,7 +799,7 @@ namespace ClaudeMeter
             startupItem.Checked = IsStartupEnabled();
             menu.Items.Add(startupItem);
             menu.Items.Add("表示／非表示", null, delegate { ToggleVisible(); });
-            menu.Items.Add("設定ファイルを開く", null, delegate { Settings.OpenInEditor(); });
+            menu.Items.Add("設定...", null, delegate { ShowSettings(); });
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("終了", null, delegate { Close(); });
             ContextMenuStrip = menu;
@@ -830,6 +1013,28 @@ namespace ClaudeMeter
             settings.Save();
         }
 
+        SettingsForm settingsForm;
+
+        void ShowSettings()
+        {
+            if (settingsForm != null) { settingsForm.Activate(); return; }
+            using (settingsForm = new SettingsForm(settings, IsStartupEnabled()))
+            {
+                if (settingsForm.ShowDialog() == DialogResult.OK)
+                {
+                    settingsForm.ApplyTo(settings);
+                    settings.Save();
+                    refreshTimer.Interval = settings.RefreshMinutes * 60 * 1000;
+                    TopMost = settings.TopMost;
+                    topMostItem.Checked = settings.TopMost;
+                    Opacity = settings.Opacity;
+                    if (settingsForm.StartupEnabled != IsStartupEnabled()) SetStartup(settingsForm.StartupEnabled);
+                    Invalidate();
+                }
+            }
+            settingsForm = null;
+        }
+
         void ToggleVisible()
         {
             if (Visible) Hide();
@@ -845,11 +1050,16 @@ namespace ClaudeMeter
 
         void ToggleStartup()
         {
+            SetStartup(!IsStartupEnabled());
+        }
+
+        void SetStartup(bool enable)
+        {
             try
             {
                 using (var k = Registry.CurrentUser.CreateSubKey(RunKey))
                 {
-                    if (IsStartupEnabled()) k.DeleteValue(RunName, false);
+                    if (!enable) k.DeleteValue(RunName, false);
                     else k.SetValue(RunName, "\"" + Application.ExecutablePath + "\"");
                 }
             }
