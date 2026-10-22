@@ -35,7 +35,7 @@ Windows に標準で入っている .NET Framework 4.x の `csc.exe` でビル�
 build.bat
 ```
 
-`bin\ClaudeMeter.exe` が作られます。
+`bin\ClaudeMeter.exe` が作られます。exe のアイコンには `src\app.ico` が埋め込まれます。アイコンを作り直すときは `tools\make-icon.ps1` を実行してください。
 
 ## 設定
 

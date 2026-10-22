@@ -8,6 +8,6 @@ if not exist "%CSC%" (
   exit /b 1
 )
 if not exist "%~dp0bin" mkdir "%~dp0bin"
-"%CSC%" /nologo /target:winexe /optimize+ /codepage:65001 /out:"%~dp0bin\ClaudeMeter.exe" /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "%~dp0src\ClaudeMeter.cs"
+"%CSC%" /nologo /target:winexe /optimize+ /codepage:65001 /out:"%~dp0bin\ClaudeMeter.exe" /win32icon:"%~dp0src\app.ico" /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "%~dp0src\ClaudeMeter.cs"
 if errorlevel 1 exit /b 1
 echo Built: %~dp0bin\ClaudeMeter.exe
