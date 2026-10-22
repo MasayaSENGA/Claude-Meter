@@ -48,6 +48,7 @@ namespace ClaudeMeter
                 string snapshot = args.Length >= 3 && args[1] == "--snapshot" ? args[2] : null;
                 float forcedScale = 0;
                 if (snapshot != null && args.Length >= 4) float.TryParse(args[3], NumberStyles.Float, CultureInfo.InvariantCulture, out forcedScale);
+                if (snapshot != null && args.Length >= 5) MeterForm.SnapshotStyle = args[4];
                 Application.Run(new MeterForm(snapshot, forcedScale));
             }
         }
@@ -63,6 +64,7 @@ namespace ClaudeMeter
         public bool PeakWeekdaysOnly = true;
         public bool TopMost = true;
         public double Opacity = 0.95;
+        public string Style = "bar"; // "bar" または "gauge"（スピードメーター）
         public int X = -1;
         public int Y = -1;
 
@@ -87,6 +89,7 @@ namespace ClaudeMeter
                     if (d.TryGetValue("peakEnd", out v)) s.PeakEnd = Convert.ToString(v);
                     if (d.TryGetValue("peakWeekdaysOnly", out v)) s.PeakWeekdaysOnly = Convert.ToBoolean(v);
                     if (d.TryGetValue("topMost", out v)) s.TopMost = Convert.ToBoolean(v);
+                    if (d.TryGetValue("style", out v)) s.Style = Convert.ToString(v) == "gauge" ? "gauge" : "bar";
                     if (d.TryGetValue("opacity", out v)) s.Opacity = Math.Min(1.0, Math.Max(0.3, Convert.ToDouble(v, CultureInfo.InvariantCulture)));
                     if (d.TryGetValue("x", out v)) s.X = Convert.ToInt32(v);
                     if (d.TryGetValue("y", out v)) s.Y = Convert.ToInt32(v);
@@ -108,6 +111,7 @@ namespace ClaudeMeter
                 d["peakStart"] = PeakStart;
                 d["peakEnd"] = PeakEnd;
                 d["peakWeekdaysOnly"] = PeakWeekdaysOnly;
+                d["style"] = Style;
                 d["topMost"] = TopMost;
                 d["opacity"] = Opacity;
                 d["x"] = X;
@@ -523,6 +527,8 @@ namespace ClaudeMeter
         readonly DateTimePicker peakEnd = TimePicker();
         readonly CheckBox weekdaysOnly = new CheckBox { Text = "平日のみ（土日はオフピーク）", AutoSize = true };
         readonly Label localPeak = new Label { AutoSize = true, ForeColor = SystemColors.GrayText };
+        readonly RadioButton styleBar = new RadioButton { Text = "バー", AutoSize = true };
+        readonly RadioButton styleGauge = new RadioButton { Text = "スピードメーター", AutoSize = true };
         readonly CheckBox topMost = new CheckBox { Text = "常に手前に表示", AutoSize = true };
         readonly TrackBar opacity = new TrackBar { Minimum = 30, Maximum = 100, TickFrequency = 10, SmallChange = 5, LargeChange = 10, Width = 200, AutoSize = false, Height = 30 };
         readonly Label opacityValue = new Label { AutoSize = true, Anchor = AnchorStyles.Left };
@@ -560,6 +566,7 @@ namespace ClaudeMeter
             Row(table, "", localPeak);
 
             Section(table, "表示");
+            Row(table, "表示形式", Flow(styleBar, styleGauge));
             Row(table, "", topMost);
             Row(table, "不透明度", Flow(opacity, opacityValue));
             Row(table, "", startup);
@@ -599,6 +606,8 @@ namespace ClaudeMeter
             peakStart.Value = DateTime.Today + ParseTime(s.PeakStart);
             peakEnd.Value = DateTime.Today + ParseTime(s.PeakEnd);
             weekdaysOnly.Checked = s.PeakWeekdaysOnly;
+            styleGauge.Checked = s.Style == "gauge";
+            styleBar.Checked = !styleGauge.Checked;
             topMost.Checked = s.TopMost;
             opacity.Value = (int)Math.Round(Math.Min(1.0, Math.Max(0.3, s.Opacity)) * 100);
             opacityValue.Text = opacity.Value + "%";
@@ -614,6 +623,7 @@ namespace ClaudeMeter
             s.PeakStart = peakStart.Value.ToString("HH:mm", CultureInfo.InvariantCulture);
             s.PeakEnd = peakEnd.Value.ToString("HH:mm", CultureInfo.InvariantCulture);
             s.PeakWeekdaysOnly = weekdaysOnly.Checked;
+            s.Style = styleGauge.Checked ? "gauge" : "bar";
             s.TopMost = topMost.Checked;
             s.Opacity = opacity.Value / 100.0;
         }
@@ -723,7 +733,9 @@ namespace ClaudeMeter
         float scale = 1f;
         bool scaleForced;
         Font titleFont, labelFont, pctFont, smallFont;
-        const int BaseWidth = 260, BaseHeight = 222;
+        bool IsGauge { get { return settings.Style == "gauge"; } }
+        int BaseWidth { get { return IsGauge ? 414 : 260; } }
+        int BaseHeight { get { return IsGauge ? 214 : 222; } }
 
         int S(float v) { return (int)Math.Round(v * scale); }
 
@@ -761,6 +773,7 @@ namespace ClaudeMeter
         const string RunName = "ClaudeMeter";
 
         readonly string snapshotPath;
+        public static string SnapshotStyle; // 動作確認用に表示形式を上書きする（保存はしない）
 
         // snapshotPath を指定すると1回取得して描画を PNG に保存し終了する（動作確認用）。
         // forcedScale > 0 ならモニターの拡大率の代わりにその倍率で描く。
@@ -768,6 +781,7 @@ namespace ClaudeMeter
         {
             this.snapshotPath = snapshotPath;
             settings = Settings.Load();
+            if (SnapshotStyle != null) settings.Style = SnapshotStyle;
 
             Text = "Claude Meter";
             FormBorderStyle = FormBorderStyle.None;
@@ -888,9 +902,20 @@ namespace ClaudeMeter
             DrawRight(g, status, smallFont, Theme.Sub, pad + w, S(10));
 
             int y = S(34);
-            DrawMeter(g, "5時間制限", last == null ? null : last.FiveHour, pad, y, w); y += S(46);
-            DrawMeter(g, "週間制限", last == null ? null : last.Weekly, pad, y, w); y += S(46);
-            DrawMeter(g, "週間制限（Fable）", last == null ? null : last.WeeklyFable, pad, y, w); y += S(46);
+            if (IsGauge)
+            {
+                int cw = w / 3;
+                DrawGauge(g, "5時間制限", last == null ? null : last.FiveHour, pad, y, cw);
+                DrawGauge(g, "週間制限", last == null ? null : last.Weekly, pad + cw, y, cw);
+                DrawGauge(g, "週間制限（Fable）", last == null ? null : last.WeeklyFable, pad + cw * 2, y, cw);
+                y += S(134);
+            }
+            else
+            {
+                DrawMeter(g, "5時間制限", last == null ? null : last.FiveHour, pad, y, w); y += S(46);
+                DrawMeter(g, "週間制限", last == null ? null : last.Weekly, pad, y, w); y += S(46);
+                DrawMeter(g, "週間制限（Fable）", last == null ? null : last.WeeklyFable, pad, y, w); y += S(46);
+            }
 
             // ピーク／オフピーク
             DateTime change;
@@ -935,6 +960,73 @@ namespace ClaudeMeter
             else if (win.ResetsAt.HasValue) sub = "リセット " + FormatWhen(win.ResetsAt.Value) + "（" + FormatSpan(win.ResetsAt.Value - DateTime.Now) + "）";
             else sub = "未使用";
             Draw(g, sub, smallFont, Theme.Sub, x, y + S(29));
+        }
+
+        // スピードメーター: 左下(0%)から右下(100%)まで 240° の文字盤と針
+        const float GaugeStart = 150f, GaugeSweep = 240f;
+
+        void DrawGauge(Graphics g, string label, UsageWindow win, int x, int y, int cw)
+        {
+            bool has = win != null && win.Present;
+            double pct = has ? Math.Max(0, Math.Min(100, win.Utilization)) : 0;
+            float r = S(44);
+            float cx = x + cw / 2f, cy = y + r + S(4);
+            var dial = new RectangleF(cx - r, cy - r, r * 2, r * 2);
+
+            // 目盛りの外側に 70〜90% を黄、90〜100% を赤の帯で示す
+            float zr = r + S(4);
+            var zone = new RectangleF(cx - zr, cy - zr, zr * 2, zr * 2);
+            using (var p = new Pen(Color.FromArgb(150, Theme.Warn), S(2))) g.DrawArc(p, zone, Angle(70), GaugeSweep * 0.2f);
+            using (var p = new Pen(Color.FromArgb(170, Theme.Danger), S(2))) g.DrawArc(p, zone, Angle(90), GaugeSweep * 0.1f);
+
+            using (var p = new Pen(Theme.Track, S(7))) g.DrawArc(p, dial, GaugeStart, GaugeSweep);
+            if (has && pct > 0)
+                using (var p = new Pen(Theme.ForPercent(pct), S(7))) g.DrawArc(p, dial, GaugeStart, (float)(GaugeSweep * pct / 100));
+
+            // 10% ごとの目盛り（0・50・100% は長く）
+            for (int i = 0; i <= 10; i++)
+            {
+                bool major = i % 5 == 0;
+                double a = Angle(i * 10) * Math.PI / 180;
+                float r1 = r - S(major ? 15 : 11), r2 = r - S(6);
+                using (var p = new Pen(major ? Theme.Text : Theme.Sub, major ? S(2) : Math.Max(1, S(1))))
+                    g.DrawLine(p, cx + (float)Math.Cos(a) * r1, cy + (float)Math.Sin(a) * r1, cx + (float)Math.Cos(a) * r2, cy + (float)Math.Sin(a) * r2);
+            }
+
+            // 針
+            double na = Angle(pct) * Math.PI / 180;
+            float nl = r - S(13);
+            using (var p = new Pen(has ? Theme.Text : Theme.Sub, Math.Max(2, S(2.5f))))
+            {
+                p.StartCap = LineCap.Round; p.EndCap = LineCap.Round;
+                g.DrawLine(p, cx, cy, cx + (float)Math.Cos(na) * nl, cy + (float)Math.Sin(na) * nl);
+            }
+            float hub = S(5);
+            using (var b = new SolidBrush(has ? Theme.ForPercent(pct) : Theme.Sub)) g.FillEllipse(b, cx - hub, cy - hub, hub * 2, hub * 2);
+
+            DrawCenter(g, has ? Math.Round(pct).ToString("0") + "%" : "—", pctFont, has ? Theme.ForPercent(pct) : Theme.Sub, cx, cy + S(12));
+            DrawCenter(g, label, labelFont, Theme.Text, cx, cy + S(32));
+            if (win != null)
+            {
+                if (!has) DrawCenter(g, "データなし", smallFont, Theme.Sub, cx, cy + S(50));
+                else if (win.ResetsAt.HasValue)
+                {
+                    DrawCenter(g, "リセット " + FormatWhen(win.ResetsAt.Value), smallFont, Theme.Sub, cx, cy + S(50));
+                    DrawCenter(g, FormatSpan(win.ResetsAt.Value - DateTime.Now), smallFont, Theme.Sub, cx, cy + S(64));
+                }
+                else DrawCenter(g, "未使用", smallFont, Theme.Sub, cx, cy + S(50));
+            }
+        }
+
+        static float Angle(double pct)
+        {
+            return GaugeStart + (float)(GaugeSweep * pct / 100);
+        }
+
+        void DrawCenter(Graphics g, string s, Font f, Color c, float cx, float y)
+        {
+            var size = TextRenderer.MeasureText(g, s, f, Size.Empty, TextFormatFlags.NoPadding);
+            TextRenderer.DrawText(g, s, f, new Point((int)(cx - size.Width / 2f), (int)y), c, TextFormatFlags.NoPadding);
         }
 
         static string FormatWhen(DateTime t)
@@ -1000,6 +1092,7 @@ namespace ClaudeMeter
 
         void SavePosition()
         {
+            if (snapshotPath != null) return; // 動作確認では設定を書き換えない
             settings.X = Left;
             settings.Y = Top;
             settings.Save();
@@ -1015,6 +1108,16 @@ namespace ClaudeMeter
 
         SettingsForm settingsForm;
 
+        // 表示形式の切り替えで大きさが変わったとき、画面外にはみ出さないよう戻す
+        void KeepOnScreen()
+        {
+            var wa = Screen.FromControl(this).WorkingArea;
+            int x = Math.Max(wa.Left, Math.Min(Left, wa.Right - Width));
+            int y = Math.Max(wa.Top, Math.Min(Top, wa.Bottom - Height));
+            Location = new Point(x, y);
+            SavePosition();
+        }
+
         void ShowSettings()
         {
             if (settingsForm != null) { settingsForm.Activate(); return; }
@@ -1028,6 +1131,8 @@ namespace ClaudeMeter
                     TopMost = settings.TopMost;
                     topMostItem.Checked = settings.TopMost;
                     Opacity = settings.Opacity;
+                    ClientSize = new Size(S(BaseWidth), S(BaseHeight));
+                    KeepOnScreen();
                     if (settingsForm.StartupEnabled != IsStartupEnabled()) SetStartup(settingsForm.StartupEnabled);
                     Invalidate();
                 }
