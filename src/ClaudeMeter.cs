@@ -65,6 +65,8 @@ namespace ClaudeMeter
         public bool TopMost = true;
         public double Opacity = 0.95;
         public string Style = "bar"; // "bar" または "gauge"（スピードメーター）
+        public bool GaugeVertical = false; // スピードメーターを縦に並べる
+        public bool ShowFable = true; // Fable を使えないプランでは非表示にできる
         public int X = -1;
         public int Y = -1;
 
@@ -90,6 +92,8 @@ namespace ClaudeMeter
                     if (d.TryGetValue("peakWeekdaysOnly", out v)) s.PeakWeekdaysOnly = Convert.ToBoolean(v);
                     if (d.TryGetValue("topMost", out v)) s.TopMost = Convert.ToBoolean(v);
                     if (d.TryGetValue("style", out v)) s.Style = Convert.ToString(v) == "gauge" ? "gauge" : "bar";
+                    if (d.TryGetValue("gaugeVertical", out v)) s.GaugeVertical = Convert.ToBoolean(v);
+                    if (d.TryGetValue("showFable", out v)) s.ShowFable = Convert.ToBoolean(v);
                     if (d.TryGetValue("opacity", out v)) s.Opacity = Math.Min(1.0, Math.Max(0.3, Convert.ToDouble(v, CultureInfo.InvariantCulture)));
                     if (d.TryGetValue("x", out v)) s.X = Convert.ToInt32(v);
                     if (d.TryGetValue("y", out v)) s.Y = Convert.ToInt32(v);
@@ -112,6 +116,8 @@ namespace ClaudeMeter
                 d["peakEnd"] = PeakEnd;
                 d["peakWeekdaysOnly"] = PeakWeekdaysOnly;
                 d["style"] = Style;
+                d["gaugeVertical"] = GaugeVertical;
+                d["showFable"] = ShowFable;
                 d["topMost"] = TopMost;
                 d["opacity"] = Opacity;
                 d["x"] = X;
@@ -529,6 +535,9 @@ namespace ClaudeMeter
         readonly Label localPeak = new Label { AutoSize = true, ForeColor = SystemColors.GrayText };
         readonly RadioButton styleBar = new RadioButton { Text = "バー", AutoSize = true };
         readonly RadioButton styleGauge = new RadioButton { Text = "スピードメーター", AutoSize = true };
+        readonly RadioButton layoutHorizontal = new RadioButton { Text = "横並び", AutoSize = true };
+        readonly RadioButton layoutVertical = new RadioButton { Text = "縦並び", AutoSize = true };
+        readonly CheckBox showFable = new CheckBox { Text = "週間制限（Fable）を表示", AutoSize = true };
         readonly CheckBox topMost = new CheckBox { Text = "常に手前に表示", AutoSize = true };
         readonly TrackBar opacity = new TrackBar { Minimum = 30, Maximum = 100, TickFrequency = 10, SmallChange = 5, LargeChange = 10, Width = 200, AutoSize = false, Height = 30 };
         readonly Label opacityValue = new Label { AutoSize = true, Anchor = AnchorStyles.Left };
@@ -567,6 +576,8 @@ namespace ClaudeMeter
 
             Section(table, "表示");
             Row(table, "表示形式", Flow(styleBar, styleGauge));
+            Row(table, "メーターの並び", Flow(layoutHorizontal, layoutVertical));
+            Row(table, "", showFable);
             Row(table, "", topMost);
             Row(table, "不透明度", Flow(opacity, opacityValue));
             Row(table, "", startup);
@@ -592,6 +603,7 @@ namespace ClaudeMeter
             peakEnd.ValueChanged += delegate { UpdateLocalPeak(); };
             weekdaysOnly.CheckedChanged += delegate { UpdateLocalPeak(); };
             opacity.ValueChanged += delegate { opacityValue.Text = opacity.Value + "%"; };
+            styleGauge.CheckedChanged += delegate { UpdateLayoutEnabled(); };
 
             LoadValues(s, startupEnabled);
         }
@@ -608,6 +620,10 @@ namespace ClaudeMeter
             weekdaysOnly.Checked = s.PeakWeekdaysOnly;
             styleGauge.Checked = s.Style == "gauge";
             styleBar.Checked = !styleGauge.Checked;
+            layoutVertical.Checked = s.GaugeVertical;
+            layoutHorizontal.Checked = !s.GaugeVertical;
+            showFable.Checked = s.ShowFable;
+            UpdateLayoutEnabled();
             topMost.Checked = s.TopMost;
             opacity.Value = (int)Math.Round(Math.Min(1.0, Math.Max(0.3, s.Opacity)) * 100);
             opacityValue.Text = opacity.Value + "%";
@@ -624,8 +640,16 @@ namespace ClaudeMeter
             s.PeakEnd = peakEnd.Value.ToString("HH:mm", CultureInfo.InvariantCulture);
             s.PeakWeekdaysOnly = weekdaysOnly.Checked;
             s.Style = styleGauge.Checked ? "gauge" : "bar";
+            s.GaugeVertical = layoutVertical.Checked;
+            s.ShowFable = showFable.Checked;
             s.TopMost = topMost.Checked;
             s.Opacity = opacity.Value / 100.0;
+        }
+
+        // 並びの指定はスピードメーターのときだけ意味がある
+        void UpdateLayoutEnabled()
+        {
+            layoutHorizontal.Enabled = layoutVertical.Enabled = styleGauge.Checked;
         }
 
         // 選んだタイムゾーンの時間帯が、この PC の時刻で今日何時になるかを示す
@@ -734,8 +758,29 @@ namespace ClaudeMeter
         bool scaleForced;
         Font titleFont, labelFont, pctFont, smallFont;
         bool IsGauge { get { return settings.Style == "gauge"; } }
-        int BaseWidth { get { return IsGauge ? 414 : 260; } }
-        int BaseHeight { get { return IsGauge ? 214 : 222; } }
+        bool IsVertical { get { return IsGauge && settings.GaugeVertical; } }
+        int MeterCount { get { return settings.ShowFable ? 3 : 2; } }
+        const int GaugeCell = 130, GaugeRow = 134;
+
+        int BaseWidth
+        {
+            get
+            {
+                if (!IsGauge) return 260;
+                return 24 + (IsVertical ? 146 : GaugeCell * MeterCount);
+            }
+        }
+
+        // メーター部の下にピーク表示（縦並びは2行）とエラー行が入る
+        int BaseHeight
+        {
+            get
+            {
+                if (!IsGauge) return 34 + 46 * MeterCount + 50;
+                if (IsVertical) return 34 + GaugeRow * MeterCount + 56;
+                return 214;
+            }
+        }
 
         int S(float v) { return (int)Math.Round(v * scale); }
 
@@ -781,7 +826,14 @@ namespace ClaudeMeter
         {
             this.snapshotPath = snapshotPath;
             settings = Settings.Load();
-            if (SnapshotStyle != null) settings.Style = SnapshotStyle;
+            if (SnapshotStyle != null)
+            {
+                // 例: "gauge,vertical,nofable"
+                var opts = new List<string>(SnapshotStyle.Split(','));
+                settings.Style = opts.Contains("gauge") ? "gauge" : "bar";
+                settings.GaugeVertical = opts.Contains("vertical");
+                settings.ShowFable = !opts.Contains("nofable");
+            }
 
             Text = "Claude Meter";
             FormBorderStyle = FormBorderStyle.None;
@@ -901,20 +953,28 @@ namespace ClaudeMeter
             string status = fetching ? "更新中…" : (last != null ? last.FetchedAt.ToString("HH:mm") + " 更新" : "");
             DrawRight(g, status, smallFont, Theme.Sub, pad + w, S(10));
 
+            var labels = new List<string> { "5時間制限", "週間制限" };
+            var wins = new List<UsageWindow> { last == null ? null : last.FiveHour, last == null ? null : last.Weekly };
+            if (settings.ShowFable)
+            {
+                labels.Add("週間制限（Fable）");
+                wins.Add(last == null ? null : last.WeeklyFable);
+            }
+
             int y = S(34);
             if (IsGauge)
             {
-                int cw = w / 3;
-                DrawGauge(g, "5時間制限", last == null ? null : last.FiveHour, pad, y, cw);
-                DrawGauge(g, "週間制限", last == null ? null : last.Weekly, pad + cw, y, cw);
-                DrawGauge(g, "週間制限（Fable）", last == null ? null : last.WeeklyFable, pad + cw * 2, y, cw);
-                y += S(134);
+                int cw = IsVertical ? w : w / labels.Count;
+                for (int i = 0; i < labels.Count; i++)
+                {
+                    if (IsVertical) { DrawGauge(g, labels[i], wins[i], pad, y, cw); y += S(GaugeRow); }
+                    else DrawGauge(g, labels[i], wins[i], pad + cw * i, y, cw);
+                }
+                if (!IsVertical) y += S(GaugeRow);
             }
             else
             {
-                DrawMeter(g, "5時間制限", last == null ? null : last.FiveHour, pad, y, w); y += S(46);
-                DrawMeter(g, "週間制限", last == null ? null : last.Weekly, pad, y, w); y += S(46);
-                DrawMeter(g, "週間制限（Fable）", last == null ? null : last.WeeklyFable, pad, y, w); y += S(46);
+                for (int i = 0; i < labels.Count; i++) { DrawMeter(g, labels[i], wins[i], pad, y, w); y += S(46); }
             }
 
             // ピーク／オフピーク
@@ -926,7 +986,9 @@ namespace ClaudeMeter
             if (change != DateTime.MaxValue)
             {
                 string when = (peak ? "終了 " : "開始 ") + FormatWhen(change) + "（" + FormatSpan(change - DateTime.Now) + "）";
-                DrawRight(g, when, smallFont, Theme.Sub, pad + w, y + S(2));
+                // 縦並びは幅が狭いので2行目に出す
+                if (IsVertical) Draw(g, when, smallFont, Theme.Sub, pad + S(15), y + S(19));
+                else DrawRight(g, when, smallFont, Theme.Sub, pad + w, y + S(2));
             }
 
             if (last != null && last.Error != null)
@@ -1074,7 +1136,7 @@ namespace ClaudeMeter
             var sb = new StringBuilder("Claude");
             if (last.FiveHour.Present) sb.Append(" 5h:" + Math.Round(last.FiveHour.Utilization) + "%");
             if (last.Weekly.Present) sb.Append(" 週:" + Math.Round(last.Weekly.Utilization) + "%");
-            if (last.WeeklyFable.Present) sb.Append(" Fable:" + Math.Round(last.WeeklyFable.Utilization) + "%");
+            if (settings.ShowFable && last.WeeklyFable.Present) sb.Append(" Fable:" + Math.Round(last.WeeklyFable.Utilization) + "%");
             string t = sb.ToString();
             tray.Text = t.Length > 63 ? t.Substring(0, 63) : t;
         }
