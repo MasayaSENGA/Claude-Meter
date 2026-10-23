@@ -10,7 +10,7 @@ final class MeterPanel: NSPanel {
         hidesOnDeactivate = false
         hasShadow = true
         backgroundColor = Theme.back
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenNone]
     }
 }
 
