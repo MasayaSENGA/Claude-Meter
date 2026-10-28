@@ -2,3 +2,4 @@ bin/
 obj/
 *.tmp
 *.png.txt
+__pycache__/

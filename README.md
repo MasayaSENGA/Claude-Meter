@@ -7,7 +7,10 @@ Claude の利用制限の使用状況を、デスクトップの隅に小さく�
 - 週間制限（Fable）の使用率とリセット時刻
 - 今がピークタイムかオフピークか、次に切り替わる時刻
 
-管理者権限は不要です。インストール作業もありません。
+管理者権限は不要です。Python 版と exe 版があり、機能は同じです。
+
+- **Python 版**（`ClaudeMeter.pyw`）: 署名済みの Python で動くので、Windows の Smart App Control（スマート アプリ コントロール）がオンでも起動できます。
+- **exe 版**（`bin\ClaudeMeter.exe`）: Python が要りません。ただし署名していないため、Smart App Control がオンだとブロックされます。
 
 表示形式はバーとスピードメーターから選べます（設定画面で切り替え）。
 
@@ -15,8 +18,9 @@ Claude の利用制限の使用状況を、デスクトップの隅に小さく�
 
 ## 使い方
 
-1. `bin\ClaudeMeter.exe` をダブルクリックして起動します。
-2. 初回は Claude Code CLI でログインしておいてください（`claude` を起動して `/login`）。アプリはそのログイン情報（`%USERPROFILE%\.claude\.credentials.json`）を使います。
+1. [python.org](https://www.python.org/downloads/windows/) のインストーラーで Python 3.8 以降を入れます（「py launcher」と「tcl/tk and IDLE」を含めてください。どちらも既定で入ります）。追加のパッケージは要りません。Microsoft Store 版の Python でも動きますが、設定ファイルとレジストリへの書き込みが Store アプリ専用の領域に振り向けられます。そのため exe 版と設定を共有できず、「Windows 起動時に開始」も使えません。
+2. `ClaudeMeter.pyw` をダブルクリックして起動します（コンソール窓は出ません）。exe 版を使う場合は `bin\ClaudeMeter.exe` をダブルクリックします。
+3. 初回は Claude Code CLI でログインしておいてください（`claude` を起動して `/login`）。アプリはそのログイン情報（`%USERPROFILE%\.claude\.credentials.json`）を使います。
 
 | 操作 | 内容 |
 |---|---|
@@ -27,7 +31,9 @@ Claude の利用制限の使用状況を、デスクトップの隅に小さく�
 
 データは5分ごとに自動更新します。メーターの色は 70% 未満で青、70% 以上で黄、90% 以上で赤になります。
 
-## ビルド
+Python 版と exe 版は設定ファイルを共有します。同時に起動できるのはどちらか一方だけです。「Windows 起動時に開始」は、最後にオンにした方が登録されます。
+
+## exe 版のビルド
 
 Windows に標準で入っている .NET Framework 4.x の `csc.exe` でビルドします（SDK のインストール不要）。
 
