@@ -18,7 +18,7 @@ Claude の利用制限の使用状況を、デスクトップの隅に小さく�
 
 ## 使い方
 
-1. [python.org](https://www.python.org/downloads/windows/) のインストーラーで Python 3.8 以降を入れます（「py launcher」と「tcl/tk and IDLE」を含めてください。どちらも既定で入ります）。追加のパッケージは要りません。Microsoft Store 版の Python でも動きますが、設定ファイルとレジストリへの書き込みが Store アプリ専用の領域に振り向けられます。そのため exe 版と設定を共有できず、「Windows 起動時に開始」も使えません。
+1. [python.org](https://www.python.org/downloads/windows/) の Python install manager（またはインストーラー）で Python 3.8 以降を入れます。tkinter が含まれる標準の構成で入れてください。追加のパッケージは要りません。Microsoft Store 版の Python でも動きますが、設定ファイルとレジストリへの書き込みが Store アプリ専用の領域に振り向けられます。そのため exe 版と設定を共有できず、「Windows 起動時に開始」も使えません。
 2. `ClaudeMeter.pyw` をダブルクリックして起動します（コンソール窓は出ません）。exe 版を使う場合は `bin\ClaudeMeter.exe` をダブルクリックします。
 3. 初回は Claude Code CLI でログインしておいてください（`claude` を起動して `/login`）。アプリはそのログイン情報（`%USERPROFILE%\.claude\.credentials.json`）を使います。
 
