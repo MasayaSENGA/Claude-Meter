@@ -1133,6 +1133,119 @@ class SettingsDialog(tk.Toplevel):
         self.destroy()
 
 
+# ---------- GDI+ ----------
+# tk のキャンバスは図形をアンチエイリアスしないので、図形は GDI+ で画像に描いてキャンバスに貼る
+gdiplus = ctypes.WinDLL("gdiplus")
+_F = ctypes.c_float
+_P = ctypes.c_void_p
+_PP = ctypes.POINTER(ctypes.c_void_p)
+
+
+class GdiplusStartupInput(ctypes.Structure):
+    _fields_ = [("GdiplusVersion", ctypes.c_uint32), ("DebugEventCallback", ctypes.c_void_p),
+                ("SuppressBackgroundThread", wt.BOOL), ("SuppressExternalCodecs", wt.BOOL)]
+
+
+for _name, _args in (("GdiplusStartup", (ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(GdiplusStartupInput), _P)),
+                     ("GdipCreateBitmapFromScan0", (ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, _P, _PP)),
+                     ("GdipGetImageGraphicsContext", (_P, _PP)),
+                     ("GdipSetSmoothingMode", (_P, ctypes.c_int)),
+                     ("GdipGraphicsClear", (_P, ctypes.c_uint32)),
+                     ("GdipCreatePen1", (ctypes.c_uint32, _F, ctypes.c_int, _PP)),
+                     ("GdipSetPenStartCap", (_P, ctypes.c_int)),
+                     ("GdipSetPenEndCap", (_P, ctypes.c_int)),
+                     ("GdipCreateSolidFill", (ctypes.c_uint32, _PP)),
+                     ("GdipCreatePath", (ctypes.c_int, _PP)),
+                     ("GdipAddPathArc", (_P, _F, _F, _F, _F, _F, _F)),
+                     ("GdipClosePathFigure", (_P,)),
+                     ("GdipDrawRectangle", (_P, _P, _F, _F, _F, _F)),
+                     ("GdipDrawArc", (_P, _P, _F, _F, _F, _F, _F, _F)),
+                     ("GdipDrawLine", (_P, _P, _F, _F, _F, _F)),
+                     ("GdipFillEllipse", (_P, _P, _F, _F, _F, _F)),
+                     ("GdipFillPath", (_P, _P, _P)),
+                     ("GdipDeletePen", (_P,)),
+                     ("GdipDeleteBrush", (_P,)),
+                     ("GdipDeletePath", (_P,)),
+                     ("GdipDeleteGraphics", (_P,)),
+                     ("GdipDisposeImage", (_P,))):
+    _proto(getattr(gdiplus, _name), ctypes.c_int, *_args)
+
+_gdiplus_token = None
+
+
+def argb(c, a=255):
+    return (a << 24) | (c[0] << 16) | (c[1] << 8) | c[2]
+
+
+class Painter:
+    """GDI+ でアンチエイリアスをかけて図形を描き、tk の PhotoImage にする"""
+
+    def __init__(self, w, h, back):
+        global _gdiplus_token
+        if _gdiplus_token is None:
+            token = ctypes.c_size_t()
+            gdiplus.GdiplusStartup(ctypes.byref(token), ctypes.byref(GdiplusStartupInput(1, None, False, False)), None)
+            _gdiplus_token = token
+        self.w, self.h = w, h
+        self.buf = (ctypes.c_ubyte * (w * h * 4))()
+        self.bmp, self.g = _P(), _P()
+        gdiplus.GdipCreateBitmapFromScan0(w, h, w * 4, 0x26200A, self.buf, ctypes.byref(self.bmp))  # 32bppARGB
+        gdiplus.GdipGetImageGraphicsContext(self.bmp, ctypes.byref(self.g))
+        gdiplus.GdipSetSmoothingMode(self.g, 4)  # AntiAlias
+        gdiplus.GdipGraphicsClear(self.g, argb(back))
+
+    def _pen(self, c, width, alpha=255, round_cap=False):
+        p = _P()
+        gdiplus.GdipCreatePen1(argb(c, alpha), width, 0, ctypes.byref(p))  # UnitWorld
+        if round_cap:
+            gdiplus.GdipSetPenStartCap(p, 2)  # LineCapRound
+            gdiplus.GdipSetPenEndCap(p, 2)
+        return p
+
+    def _brush(self, c):
+        b = _P()
+        gdiplus.GdipCreateSolidFill(argb(c), ctypes.byref(b))
+        return b
+
+    def rectangle(self, x, y, w, h, c, width):
+        p = self._pen(c, width)
+        gdiplus.GdipDrawRectangle(self.g, p, x, y, w, h)
+        gdiplus.GdipDeletePen(p)
+
+    def arc(self, x, y, w, h, start, sweep, c, width, alpha=255):
+        p = self._pen(c, width, alpha)
+        gdiplus.GdipDrawArc(self.g, p, x, y, w, h, start, sweep)
+        gdiplus.GdipDeletePen(p)
+
+    def line(self, x1, y1, x2, y2, c, width, round_cap=False):
+        p = self._pen(c, width, round_cap=round_cap)
+        gdiplus.GdipDrawLine(self.g, p, x1, y1, x2, y2)
+        gdiplus.GdipDeletePen(p)
+
+    def ellipse(self, x, y, w, h, c):
+        b = self._brush(c)
+        gdiplus.GdipFillEllipse(self.g, b, x, y, w, h)
+        gdiplus.GdipDeleteBrush(b)
+
+    def round_rect(self, x, y, w, h, c):
+        b, path = self._brush(c), _P()
+        gdiplus.GdipCreatePath(0, ctypes.byref(path))
+        gdiplus.GdipAddPathArc(path, x, y, h, h, 90, 180)
+        gdiplus.GdipAddPathArc(path, x + w - h, y, h, h, 270, 180)
+        gdiplus.GdipClosePathFigure(path)
+        gdiplus.GdipFillPath(self.g, b, path)
+        gdiplus.GdipDeletePath(path)
+        gdiplus.GdipDeleteBrush(b)
+
+    def to_photo(self, master):
+        gdiplus.GdipDeleteGraphics(self.g)
+        gdiplus.GdipDisposeImage(self.bmp)
+        bgra = bytes(self.buf)
+        rgb = bytearray(self.w * self.h * 3)
+        rgb[0::3], rgb[1::3], rgb[2::3] = bgra[2::4], bgra[1::4], bgra[0::4]
+        return tk.PhotoImage(master=master, data=b"P6 %d %d 255\n" % (self.w, self.h) + bytes(rgb), format="ppm")
+
+
 # ---------- 表示 ----------
 class Theme:
     BACK = (30, 30, 32)
@@ -1157,12 +1270,6 @@ class Theme:
 
 def color(c):
     return "#%02x%02x%02x" % c
-
-
-def blend(c, alpha):
-    """半透明色を背景色と合成した色（tk のキャンバスは透明度を扱えないため）"""
-    a = alpha / 255.0
-    return tuple(int(round(c[i] * a + Theme.BACK[i] * (1 - a))) for i in range(3))
 
 
 DOW = "月火水木金土日"
@@ -1531,8 +1638,10 @@ class MeterApp:
         pad = S(12)
         w = cw_ - pad * 2
 
-        bw = max(1, S(1))
-        cv.create_rectangle(bw / 2, bw / 2, cw_ - bw / 2, ch_ - bw / 2, outline=color(Theme.BORDER), width=bw)
+        # 図形は self.painter に描き、最後に文字より下の画像として貼る
+        self.painter = Painter(cw_, ch_, Theme.BACK)
+        shapes = cv.create_image(0, 0, anchor="nw")
+        self.painter.rectangle(0, 0, cw_ - 1, ch_ - 1, Theme.BORDER, max(1, S(1)))
 
         # ヘッダー
         self.text("Claude Meter", "title", Theme.TEXT, pad, S(8))
@@ -1564,7 +1673,7 @@ class MeterApp:
         # ピーク／オフピーク
         peak, change = self.peak.is_peak(self.settings, utc_now())
         c = Theme.PEAK if peak else Theme.OFF_PEAK
-        cv.create_oval(pad, y + S(4), pad + S(10), y + S(14), fill=color(c), outline="")
+        self.painter.ellipse(pad, y + S(4), S(10), S(10), c)
         self.text("ピークタイム" if peak else "オフピーク", "title", c, pad + S(15), y)
         if change is not None:
             when = ("終了 " if peak else "開始 ") + format_when(change) + "（" + format_span(change - dt.datetime.now()) + "）"
@@ -1577,6 +1686,9 @@ class MeterApp:
         if self.last is not None and self.last.error is not None:
             self.text(self.ellipsis(self.last.error, "small", w), "small", Theme.WARN, pad, ch_ - S(20))
 
+        self.photo = self.painter.to_photo(self.root)  # キャンバスが画像を参照している間は保持しておく
+        cv.itemconfigure(shapes, image=self.photo)
+
     def ellipsis(self, s, font, width):
         f = self.fonts[font]
         if f.measure(s) <= width:
@@ -1584,14 +1696,6 @@ class MeterApp:
         while s and f.measure(s + "…") > width:
             s = s[:-1]
         return s + "…"
-
-    def round_bar(self, x, y, length, h, c):
-        r = h / 2
-        cv = self.canvas
-        cv.create_oval(x, y, x + h, y + h, fill=color(c), outline="")
-        cv.create_oval(x + length - h, y, x + length, y + h, fill=color(c), outline="")
-        if length > h:
-            cv.create_rectangle(x + r, y, x + length - r, y + h, fill=color(c), outline="")
 
     def draw_meter(self, label, win, x, y, w):
         S = self.S
@@ -1602,10 +1706,10 @@ class MeterApp:
                   x + w, y - S(2), "ne")
 
         bar_h = S(7)
-        self.round_bar(x, y + S(20), w, bar_h, Theme.TRACK)
+        self.painter.round_rect(x, y + S(20), w, bar_h, Theme.TRACK)
         if has and pct > 0:
-            fw = max(bar_h, min(w, w * pct / 100.0))
-            self.round_bar(x, y + S(20), fw, bar_h, Theme.for_percent(pct))
+            fw = int(max(bar_h, min(w, w * pct / 100.0)))
+            self.painter.round_rect(x, y + S(20), fw, bar_h, Theme.for_percent(pct))
 
         if win is None:
             sub = ""
@@ -1620,14 +1724,12 @@ class MeterApp:
     def angle(self, pct):
         return self.GAUGE_START + self.GAUGE_SWEEP * pct / 100
 
-    def arc(self, cx, cy, r, start, sweep, c, width):
-        # tk の角度は反時計回りなので符号を反転する
-        self.canvas.create_arc(cx - r, cy - r, cx + r, cy + r, start=-start, extent=-sweep, style="arc",
-                               outline=color(c), width=width)
+    def arc(self, cx, cy, r, start, sweep, c, width, alpha=255):
+        self.painter.arc(cx - r, cy - r, r * 2, r * 2, start, sweep, c, width, alpha)
 
     def draw_gauge(self, label, win, x, y, cw):
         S = self.S
-        cv = self.canvas
+        pt = self.painter
         has = win is not None and win.present
         pct = max(0.0, min(100.0, win.utilization)) if has else 0.0
         lit = has or self.sweeping  # スイープ中はデータ未取得でも文字盤を点灯させる
@@ -1638,12 +1740,12 @@ class MeterApp:
 
         # 目盛りの外側に 70〜90% を黄、90〜100% を赤の帯で示す
         zr = r + S(4)
-        self.arc(cx, cy, zr, self.angle(70), self.GAUGE_SWEEP * 0.2, blend(Theme.WARN, 150), S(2))
-        self.arc(cx, cy, zr, self.angle(90), self.GAUGE_SWEEP * 0.1, blend(Theme.DANGER, 170), S(2))
+        self.arc(cx, cy, zr, self.angle(70), self.GAUGE_SWEEP * 0.2, Theme.WARN, S(2), 150)
+        self.arc(cx, cy, zr, self.angle(90), self.GAUGE_SWEEP * 0.1, Theme.DANGER, S(2), 170)
 
         self.arc(cx, cy, r, self.GAUGE_START, self.GAUGE_SWEEP, Theme.TRACK, S(7))
         value_sweep = self.GAUGE_SWEEP * pct / 100
-        if lit and value_sweep >= 0.5:
+        if lit and value_sweep >= 0.5:  # GDI+ は極小角度の DrawArc で失敗することがある
             self.arc(cx, cy, r, self.GAUGE_START, value_sweep, Theme.for_percent(pct), S(7))
 
         # 10% ごとの目盛り（0・50・100% は長く）
@@ -1651,17 +1753,16 @@ class MeterApp:
             major = i % 5 == 0
             a = math.radians(self.angle(i * 10))
             r1, r2 = r - S(15 if major else 11), r - S(6)
-            cv.create_line(cx + math.cos(a) * r1, cy + math.sin(a) * r1, cx + math.cos(a) * r2, cy + math.sin(a) * r2,
-                           fill=color(Theme.TEXT if major else Theme.SUB), width=S(2) if major else max(1, S(1)))
+            pt.line(cx + math.cos(a) * r1, cy + math.sin(a) * r1, cx + math.cos(a) * r2, cy + math.sin(a) * r2,
+                    Theme.TEXT if major else Theme.SUB, S(2) if major else max(1, S(1)))
 
         # 針
         na = math.radians(self.angle(pct))
         nl = r - S(13)
-        cv.create_line(cx, cy, cx + math.cos(na) * nl, cy + math.sin(na) * nl, fill=color(Theme.TEXT if lit else Theme.SUB),
-                       width=max(2, S(2.5)), capstyle="round")
+        pt.line(cx, cy, cx + math.cos(na) * nl, cy + math.sin(na) * nl, Theme.TEXT if lit else Theme.SUB,
+                max(2, S(2.5)), round_cap=True)
         hub = S(5)
-        cv.create_oval(cx - hub, cy - hub, cx + hub, cy + hub,
-                       fill=color(Theme.for_percent(pct) if lit else Theme.SUB), outline="")
+        pt.ellipse(cx - hub, cy - hub, hub * 2, hub * 2, Theme.for_percent(pct) if lit else Theme.SUB)
 
         self.text("%d%%" % round(pct) if lit else "—", "pct", Theme.for_percent(pct) if lit else Theme.SUB,
                   cx, cy + S(12), "n")
