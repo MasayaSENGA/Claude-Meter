@@ -3,3 +3,4 @@ obj/
 *.tmp
 *.png.txt
 __pycache__/
+.DS_Store
