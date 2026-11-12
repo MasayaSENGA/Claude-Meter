@@ -60,4 +60,15 @@ enum Format {
     }
 
     static func percent(_ p: Double) -> String { "\(Int(p.rounded()))%" }
+
+    static func money(_ v: Double, _ currency: String) -> String {
+        let sym = ["USD": "$", "EUR": "€", "GBP": "£", "JPY": "¥"][currency]
+        let f = NumberFormatter()
+        f.locale = posix
+        f.numberStyle = .decimal
+        f.minimumFractionDigits = currency == "JPY" ? 0 : 2
+        f.maximumFractionDigits = f.minimumFractionDigits
+        let n = f.string(from: NSNumber(value: v)) ?? String(v)
+        return sym.map { $0 + n } ?? n + " " + currency
+    }
 }

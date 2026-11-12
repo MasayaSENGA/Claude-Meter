@@ -71,6 +71,7 @@ namespace ClaudeMeter
         public bool GaugeVertical = false; // スピードメーターを縦に並べる
         public bool ShowFable = true; // Fable を使えないプランでは非表示にできる
         public bool GaugeSweep = true; // スピードメーター表示で起動時に針をスイープさせる
+        public bool ShowCredits = true; // 追加クレジット（月間の使用額）。無効なアカウントでは自動で隠れる
         public int X = -1;
         public int Y = -1;
 
@@ -99,6 +100,7 @@ namespace ClaudeMeter
                     if (d.TryGetValue("gaugeVertical", out v)) s.GaugeVertical = Convert.ToBoolean(v);
                     if (d.TryGetValue("showFable", out v)) s.ShowFable = Convert.ToBoolean(v);
                     if (d.TryGetValue("gaugeSweep", out v)) s.GaugeSweep = Convert.ToBoolean(v);
+                    if (d.TryGetValue("showCredits", out v)) s.ShowCredits = Convert.ToBoolean(v);
                     if (d.TryGetValue("opacity", out v)) s.Opacity = Math.Min(1.0, Math.Max(0.3, Convert.ToDouble(v, CultureInfo.InvariantCulture)));
                     if (d.TryGetValue("x", out v)) s.X = Convert.ToInt32(v);
                     if (d.TryGetValue("y", out v)) s.Y = Convert.ToInt32(v);
@@ -124,6 +126,7 @@ namespace ClaudeMeter
                 d["gaugeVertical"] = GaugeVertical;
                 d["showFable"] = ShowFable;
                 d["gaugeSweep"] = GaugeSweep;
+                d["showCredits"] = ShowCredits;
                 d["topMost"] = TopMost;
                 d["opacity"] = Opacity;
                 d["x"] = X;
@@ -146,6 +149,7 @@ namespace ClaudeMeter
         public bool Present;
         public double Utilization; // 0-100
         public DateTime? ResetsAt; // ローカル時刻
+        public string[] Detail; // リセット時刻の代わりに出す文字の行（追加クレジットの金額など）
     }
 
     class UsageResult
@@ -153,6 +157,7 @@ namespace ClaudeMeter
         public UsageWindow FiveHour = new UsageWindow();
         public UsageWindow Weekly = new UsageWindow();
         public UsageWindow WeeklyFable = new UsageWindow();
+        public UsageWindow Credits = new UsageWindow(); // 追加クレジット。有効なときだけ Present
         public string Error;
         public string RawBody;
         public DateTime FetchedAt;
@@ -374,6 +379,7 @@ namespace ClaudeMeter
             var d = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(body);
             r.FiveHour = ToWindow(d, "five_hour");
             r.Weekly = ToWindow(d, "seven_day");
+            r.Credits = ToCredits(d);
 
             // モデル別の週間枠は limits[] に { scope: { model: { display_name } }, percent, resets_at } で入っている
             object lv;
@@ -429,6 +435,81 @@ namespace ClaudeMeter
             if (DateTimeOffset.TryParse(Convert.ToString(v), CultureInfo.InvariantCulture, DateTimeStyles.None, out dto))
                 return dto.LocalDateTime;
             return null;
+        }
+
+        static Dictionary<string, object> Obj(Dictionary<string, object> d, string key)
+        {
+            object v;
+            return d != null && d.TryGetValue(key, out v) ? v as Dictionary<string, object> : null;
+        }
+
+        static double? Num(Dictionary<string, object> d, string key)
+        {
+            object v;
+            if (d == null || !d.TryGetValue(key, out v) || v == null) return null;
+            return Convert.ToDouble(v, CultureInfo.InvariantCulture);
+        }
+
+        static string Str(Dictionary<string, object> d, string key, string fallback)
+        {
+            object v;
+            return d != null && d.TryGetValue(key, out v) && v != null ? Convert.ToString(v) : fallback;
+        }
+
+        static bool Flag(Dictionary<string, object> d, string key)
+        {
+            object v;
+            return d != null && d.TryGetValue(key, out v) && v is bool && (bool)v;
+        }
+
+        // { amount_minor, exponent } を金額にする
+        static double? Money(Dictionary<string, object> o)
+        {
+            double? minor = Num(o, "amount_minor");
+            if (minor == null) return null;
+            return minor.Value / Math.Pow(10, Num(o, "exponent") ?? 0);
+        }
+
+        // 追加クレジットは spend に { enabled, used/limit: { amount_minor, exponent, currency } } で入っている。
+        // 無いときは extra_usage { is_enabled, used_credits, monthly_limit, decimal_places, currency } を使う
+        static UsageWindow ToCredits(Dictionary<string, object> d)
+        {
+            var w = new UsageWindow();
+            var sp = Obj(d, "spend");
+            var ex = Obj(d, "extra_usage");
+            double? used, limit, pct;
+            string currency;
+            if (Flag(sp, "enabled") && Obj(sp, "used") != null)
+            {
+                used = Money(Obj(sp, "used"));
+                limit = Money(Obj(sp, "limit"));
+                currency = Str(Obj(sp, "used"), "currency", "USD");
+                pct = Num(sp, "percent");
+            }
+            else if (Flag(ex, "is_enabled") && Num(ex, "used_credits") != null)
+            {
+                double k = Math.Pow(10, Num(ex, "decimal_places") ?? 0);
+                used = Num(ex, "used_credits") / k;
+                limit = Num(ex, "monthly_limit") / k;
+                currency = Str(ex, "currency", "USD");
+                pct = Num(ex, "utilization");
+            }
+            else return w;
+            if (used == null) return w;
+            w.Present = true;
+            if (limit.HasValue && limit.Value > 0) w.Utilization = used.Value / limit.Value * 100;
+            else if (pct.HasValue) w.Utilization = pct.Value;
+            w.Detail = limit.HasValue
+                ? new[] { "使用 " + FormatMoney(used.Value, currency), "上限 " + FormatMoney(limit.Value, currency) }
+                : new[] { "使用 " + FormatMoney(used.Value, currency) };
+            return w;
+        }
+
+        static string FormatMoney(double v, string currency)
+        {
+            string sym = currency == "USD" ? "$" : currency == "EUR" ? "€" : currency == "GBP" ? "£" : currency == "JPY" ? "¥" : null;
+            string n = v.ToString(currency == "JPY" ? "#,0" : "#,0.00", CultureInfo.InvariantCulture);
+            return sym != null ? sym + n : n + " " + currency;
         }
 
         static UsageWindow ToWindow(Dictionary<string, object> d, string key)
@@ -536,7 +617,7 @@ namespace ClaudeMeter
         NumericUpDown refresh;
         ComboBox timeZone;
         DateTimePicker peakStart, peakEnd;
-        CheckBox weekdaysOnly, gaugeSweep, showFable, topMost, startup;
+        CheckBox weekdaysOnly, gaugeSweep, showFable, showCredits, topMost, startup;
         Label localPeak, opacityValue;
         RadioButton styleBar, styleGauge, layoutHorizontal, layoutVertical;
         TrackBar opacity;
@@ -619,6 +700,7 @@ namespace ClaudeMeter
             layoutVertical = Radio("縦並び");
             gaugeSweep = Check("起動時に針を最大まで振り切る（スイープ）");
             showFable = Check("週間制限（Fable）を表示");
+            showCredits = Check("追加クレジットを表示（有効なときのみ）");
             topMost = Check("常に手前に表示");
             opacity = new TrackBar { Minimum = 30, Maximum = 100, TickFrequency = 10, SmallChange = 5, LargeChange = 10, Width = S(200), AutoSize = false, Height = S(30) };
             opacityValue = new Label { AutoSize = true, Anchor = AnchorStyles.Left };
@@ -642,6 +724,7 @@ namespace ClaudeMeter
             Row(table, "メーターの並び", Flow(layoutHorizontal, layoutVertical));
             Row(table, "", gaugeSweep);
             Row(table, "", showFable);
+            Row(table, "", showCredits);
             Row(table, "", topMost);
             Row(table, "不透明度", Flow(opacity, opacityValue));
             Row(table, "", startup);
@@ -687,6 +770,7 @@ namespace ClaudeMeter
             layoutVertical.Checked = s.GaugeVertical;
             layoutHorizontal.Checked = !s.GaugeVertical;
             showFable.Checked = s.ShowFable;
+            showCredits.Checked = s.ShowCredits;
             gaugeSweep.Checked = s.GaugeSweep;
             UpdateLayoutEnabled();
             topMost.Checked = s.TopMost;
@@ -707,6 +791,7 @@ namespace ClaudeMeter
             s.Style = styleGauge.Checked ? "gauge" : "bar";
             s.GaugeVertical = layoutVertical.Checked;
             s.ShowFable = showFable.Checked;
+            s.ShowCredits = showCredits.Checked;
             s.GaugeSweep = gaugeSweep.Checked;
             s.TopMost = topMost.Checked;
             s.Opacity = opacity.Value / 100.0;
@@ -882,7 +967,25 @@ namespace ClaudeMeter
         Font titleFont, labelFont, pctFont, smallFont;
         bool IsGauge { get { return settings.Style == "gauge"; } }
         bool IsVertical { get { return IsGauge && settings.GaugeVertical; } }
-        int MeterCount { get { return settings.ShowFable ? 3 : 2; } }
+        int MeterCount { get { List<UsageWindow> wins; return Meters(out wins).Count; } }
+
+        // 表示するメーターのラベルと値。追加クレジットは有効なアカウントでだけ出す
+        List<string> Meters(out List<UsageWindow> wins)
+        {
+            var labels = new List<string> { "5時間制限", "週間制限" };
+            wins = new List<UsageWindow> { last == null ? null : last.FiveHour, last == null ? null : last.Weekly };
+            if (settings.ShowFable)
+            {
+                labels.Add("週間制限（Fable）");
+                wins.Add(last == null ? null : last.WeeklyFable);
+            }
+            if (settings.ShowCredits && last != null && last.Credits.Present)
+            {
+                labels.Add("追加クレジット");
+                wins.Add(last.Credits);
+            }
+            return labels;
+        }
         const int GaugeCell = 130, GaugeRow = 134;
 
         int BaseWidth
@@ -951,11 +1054,12 @@ namespace ClaudeMeter
             settings = Settings.Load();
             if (SnapshotStyle != null)
             {
-                // 例: "gauge,vertical,nofable"
+                // 例: "gauge,vertical,nofable,nocredits"
                 var opts = new List<string>(SnapshotStyle.Split(','));
                 settings.Style = opts.Contains("gauge") ? "gauge" : "bar";
                 settings.GaugeVertical = opts.Contains("vertical");
                 settings.ShowFable = !opts.Contains("nofable");
+                settings.ShowCredits = !opts.Contains("nocredits");
             }
 
             Text = "Claude Meter";
@@ -1033,6 +1137,7 @@ namespace ClaudeMeter
             if (fetching) return;
             fetching = true;
             Invalidate();
+            int count = MeterCount;
             try
             {
                 var r = await UsageClient.FetchAsync();
@@ -1046,6 +1151,11 @@ namespace ClaudeMeter
             finally
             {
                 fetching = false;
+                if (MeterCount != count) // 追加クレジットの有無が変わったら大きさを合わせる
+                {
+                    ClientSize = new Size(S(BaseWidth), S(BaseHeight));
+                    if (snapshotPath == null) KeepOnScreen();
+                }
                 Invalidate();
                 UpdateTrayText();
                 if (snapshotPath != null) SaveSnapshot();
@@ -1079,13 +1189,8 @@ namespace ClaudeMeter
             string status = fetching ? "更新中…" : (last != null ? last.FetchedAt.ToString("HH:mm") + " 更新" : "");
             DrawRight(g, status, smallFont, Theme.Sub, pad + w, S(10));
 
-            var labels = new List<string> { "5時間制限", "週間制限" };
-            var wins = new List<UsageWindow> { last == null ? null : last.FiveHour, last == null ? null : last.Weekly };
-            if (settings.ShowFable)
-            {
-                labels.Add("週間制限（Fable）");
-                wins.Add(last == null ? null : last.WeeklyFable);
-            }
+            List<UsageWindow> wins;
+            var labels = Meters(out wins);
 
             int y = S(34);
             if (IsGauge)
@@ -1145,6 +1250,7 @@ namespace ClaudeMeter
             string sub;
             if (win == null) sub = "";
             else if (!has) sub = "データなし";
+            else if (win.Detail != null) sub = string.Join(" / ", win.Detail);
             else if (win.ResetsAt.HasValue) sub = "リセット " + FormatWhen(win.ResetsAt.Value) + "（" + FormatSpan(win.ResetsAt.Value - DateTime.Now) + "）";
             else sub = "未使用";
             Draw(g, sub, smallFont, Theme.Sub, x, y + S(29));
@@ -1200,6 +1306,11 @@ namespace ClaudeMeter
             if (win != null)
             {
                 if (!has) DrawCenter(g, "データなし", smallFont, Theme.Sub, cx, cy + S(50));
+                else if (win.Detail != null)
+                {
+                    for (int i = 0; i < win.Detail.Length && i < 2; i++)
+                        DrawCenter(g, win.Detail[i], smallFont, Theme.Sub, cx, cy + S(50 + 14 * i));
+                }
                 else if (win.ResetsAt.HasValue)
                 {
                     DrawCenter(g, "リセット " + FormatWhen(win.ResetsAt.Value), smallFont, Theme.Sub, cx, cy + S(50));
@@ -1266,6 +1377,7 @@ namespace ClaudeMeter
             if (last.FiveHour.Present) sb.Append(" 5h:" + Math.Round(last.FiveHour.Utilization) + "%");
             if (last.Weekly.Present) sb.Append(" 週:" + Math.Round(last.Weekly.Utilization) + "%");
             if (settings.ShowFable && last.WeeklyFable.Present) sb.Append(" Fable:" + Math.Round(last.WeeklyFable.Utilization) + "%");
+            if (settings.ShowCredits && last.Credits.Present) sb.Append(" 追加:" + Math.Round(last.Credits.Utilization) + "%");
             string t = sb.ToString();
             tray.Text = t.Length > 63 ? t.Substring(0, 63) : t;
         }

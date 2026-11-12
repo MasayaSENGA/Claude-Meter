@@ -5,12 +5,14 @@ struct UsageWindow {
     var present = false
     var utilization = 0.0 // 0-100
     var resetsAt: Date?
+    var detail: [String]? // リセット時刻の代わりに出す文字の行（追加クレジットの金額など）
 }
 
 struct UsageResult {
     var fiveHour = UsageWindow()
     var weekly = UsageWindow()
     var weeklyFable = UsageWindow()
+    var credits = UsageWindow() // 追加クレジット。有効なときだけ present
     var error: String?
     var rawBody: String?
     var fetchedAt = Clock.now
@@ -125,6 +127,7 @@ actor UsageClient {
         }
         r.fiveHour = window(d["five_hour"])
         r.weekly = window(d["seven_day"])
+        r.credits = credits(d)
 
         // モデル別の週間枠は limits[] に { scope: { model: { display_name } }, percent, resets_at } で入っている
         for item in d["limits"] as? [Any] ?? [] {
@@ -143,6 +146,38 @@ actor UsageClient {
             let w = window(d[key])
             if w.present { r.weeklyFable = w; return }
         }
+    }
+
+    // 追加クレジットは spend に { enabled, used/limit: { amount_minor, exponent, currency } } で入っている。
+    // 無いときは extra_usage { is_enabled, used_credits, monthly_limit, decimal_places, currency } を使う
+    private static func credits(_ d: [String: Any]) -> UsageWindow {
+        var w = UsageWindow()
+        func money(_ v: Any?) -> Double? {
+            guard let o = v as? [String: Any], let minor = (o["amount_minor"] as? NSNumber)?.doubleValue else { return nil }
+            return minor / pow(10, (o["exponent"] as? NSNumber)?.doubleValue ?? 0)
+        }
+        let used: Double?, limit: Double?, pct: Double?, currency: String
+        if let sp = d["spend"] as? [String: Any], (sp["enabled"] as? Bool) == true, let u = sp["used"] as? [String: Any] {
+            used = money(u)
+            limit = money(sp["limit"])
+            currency = u["currency"] as? String ?? "USD"
+            pct = (sp["percent"] as? NSNumber)?.doubleValue
+        } else if let ex = d["extra_usage"] as? [String: Any], (ex["is_enabled"] as? Bool) == true,
+                  let u = (ex["used_credits"] as? NSNumber)?.doubleValue {
+            let k = pow(10, (ex["decimal_places"] as? NSNumber)?.doubleValue ?? 0)
+            used = u / k
+            limit = (ex["monthly_limit"] as? NSNumber).map { $0.doubleValue / k }
+            currency = ex["currency"] as? String ?? "USD"
+            pct = (ex["utilization"] as? NSNumber)?.doubleValue
+        } else {
+            return w
+        }
+        guard let used else { return w }
+        w.present = true
+        if let limit, limit > 0 { w.utilization = used / limit * 100 } else if let pct { w.utilization = pct }
+        w.detail = ["使用 " + Format.money(used, currency)]
+        if let limit { w.detail?.append("上限 " + Format.money(limit, currency)) }
+        return w
     }
 
     private static func window(_ v: Any?) -> UsageWindow {

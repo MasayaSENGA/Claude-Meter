@@ -11,6 +11,7 @@ struct Settings: Equatable {
     var gaugeVertical = false // スピードメーターを縦に並べる
     var gaugeSweep = true // スピードメーター表示で起動時に針をスイープさせる
     var showFable = true // Fable を使えないプランでは非表示にできる
+    var showCredits = true // 追加クレジット（月間の使用額）。無効なアカウントでは自動で隠れる
     var topMost = true
     var opacity = 0.95
     // ウィンドウ左上の位置（AppKit の画面座標。y は上端）。-1 は未保存
@@ -19,7 +20,6 @@ struct Settings: Equatable {
 
     var isGauge: Bool { style == "gauge" }
     var isVertical: Bool { isGauge && gaugeVertical }
-    var meterCount: Int { showFable ? 3 : 2 }
 
     static var dir: URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -41,6 +41,7 @@ struct Settings: Equatable {
             if let v = num("gaugeVertical") { s.gaugeVertical = v.boolValue }
             if let v = num("gaugeSweep") { s.gaugeSweep = v.boolValue }
             if let v = num("showFable") { s.showFable = v.boolValue }
+            if let v = num("showCredits") { s.showCredits = v.boolValue }
             if let v = num("topMost") { s.topMost = v.boolValue }
             if let v = num("opacity") { s.opacity = min(1.0, max(0.3, v.doubleValue)) }
             if let v = num("x") { s.x = v.intValue }
@@ -61,6 +62,7 @@ struct Settings: Equatable {
             "gaugeVertical": gaugeVertical,
             "gaugeSweep": gaugeSweep,
             "showFable": showFable,
+            "showCredits": showCredits,
             "topMost": topMost,
             "opacity": NSDecimalNumber(string: String(format: "%.2f", opacity)), // 0.95 が 0.9499… と書かれないように
             "x": x,

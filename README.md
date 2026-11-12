@@ -5,6 +5,7 @@ Claude の利用制限の使用状況を、デスクトップの隅に小さく�
 - 5時間制限の使用率とリセット時刻
 - 週間制限（全モデル）の使用率とリセット時刻
 - 週間制限（Fable）の使用率とリセット時刻
+- 追加クレジット（月間の使用額と上限）。追加クレジットが有効なアカウントでだけ表示します
 - 今がピークタイムかオフピークか、次に切り替わる時刻
 
 管理者権限は不要です。Python 版と exe 版があり、機能は同じです。
@@ -59,6 +60,7 @@ build.bat
 | メーターの並び | 横並び | スピードメーター表示のとき、文字盤を横に並べるか縦に並べるか |
 | 起動時に針を最大まで振り切る（スイープ） | オン | スピードメーター表示のとき、起動時（とスピードメーターへ切り替えたとき）に針が一度 100% まで振れてから実際の値に戻ります |
 | 週間制限（Fable）を表示 | オン | Fable を使えないプランではオフにすると表示から外せます |
+| 追加クレジットを表示（有効なときのみ） | オン | 追加クレジットの使用額・上限と使用率を表示。追加クレジットが無効なアカウントではオンでも表示されません |
 | 常に手前に表示 | オン | メーターを他のウィンドウより手前に表示 |
 | 不透明度 | 95% | メーターの不透明度（30〜100%） |
 | Windows 起動時に開始 | オフ | サインイン時に自動で起動（管理者権限不要） |
@@ -68,7 +70,7 @@ build.bat
 設定は `%APPDATA%\ClaudeMeter\settings.json` に保存されます。
 ## 仕組み
 
-- 使用状況は Claude Code の `/usage` と同じ `https://api.anthropic.com/api/oauth/usage` から取得します。Fable の週間枠は応答の `limits[]` のうち `scope.model.display_name` が `Fable` の項目です。
+- 使用状況は Claude Code の `/usage` と同じ `https://api.anthropic.com/api/oauth/usage` から取得します。Fable の週間枠は応答の `limits[]` のうち `scope.model.display_name` が `Fable` の項目です。追加クレジットは応答の `spend`（無ければ `extra_usage`）の使用額と月間上限から使用率を計算します。応答にリセット日が無いため、追加クレジットにはリセット時刻を出しません。
 - アクセストークンが期限切れのときは、Claude Code と同じ方法でリフレッシュし、新しいトークンを `.credentials.json` に書き戻します（Claude Code CLI もそのまま使い続けられます）。
 - 自動起動は `HKEY_CURRENT_USER\...\Run` に登録するので管理者権限は要りません。
 
@@ -114,7 +116,7 @@ mac/build/ClaudeMeter.app/Contents/MacOS/ClaudeMeter --snapshot out.png --style 
 
 | オプション | 内容 |
 |---|---|
-| `--style <形式>` | `bar` / `gauge` に `vertical`、`nofable` をカンマでつなげて指定 |
+| `--style <形式>` | `bar` / `gauge` に `vertical`、`nofable`、`nocredits` をカンマでつなげて指定 |
 | `--sample <JSON>` | 実際に取得せず、usage API の応答を保存したファイルを使う |
 | `--nodata` | 取得せずに描く（データ未取得の状態） |
 | `--error <文言>` | エラー行を表示する |

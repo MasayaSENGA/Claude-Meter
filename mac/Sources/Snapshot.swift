@@ -1,5 +1,5 @@
 // 動作確認用: 描画を PNG に保存して終了する
-//   --snapshot <path> [--style gauge,vertical,nofable] [--scale 2]
+//   --snapshot <path> [--style gauge,vertical,nofable,nocredits] [--scale 2]
 //                     [--sample <usage.json> | --nodata] [--error <文言>] [--sweep <秒>] [--now <ISO 8601>]
 //   --snapshot-settings <path> [--scale 2]
 // --sample も --nodata も無ければ実際に取得する。設定ファイルは書き換えない（位置も保存しない）。
@@ -13,6 +13,7 @@ enum Snapshot {
             settings.style = opts.contains("gauge") ? "gauge" : "bar"
             settings.gaugeVertical = opts.contains("vertical")
             settings.showFable = !opts.contains("nofable")
+            settings.showCredits = !opts.contains("nocredits")
         }
         if let now = value(args, "--now") {
             Clock.override = ISO8601DateFormatter().date(from: now)
@@ -39,6 +40,7 @@ enum Snapshot {
 
         let view = MeterView(settings: settings)
         view.result = result
+        view.setFrameSize(MeterView.size(for: settings, result: result))
         if let sweep = value(args, "--sweep").flatMap(Double.init) { view.sweepElapsedOverride = sweep }
         write(view, path, scale(args))
         let info = "size=\(view.frame.size) \(result?.error ?? "")\n\(result?.rawBody ?? "")"

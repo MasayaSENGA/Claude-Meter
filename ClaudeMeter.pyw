@@ -145,6 +145,7 @@ class Settings:
         self.gauge_vertical = False  # スピードメーターを縦に並べる
         self.show_fable = True  # Fable を使えないプランでは非表示にできる
         self.gauge_sweep = True  # スピードメーター表示で起動時に針をスイープさせる
+        self.show_credits = True  # 追加クレジット（月間の使用額）。無効なアカウントでは自動で隠れる
         self.x = -1
         self.y = -1
 
@@ -166,6 +167,7 @@ class Settings:
                 if "gaugeVertical" in d: s.gauge_vertical = to_bool(d["gaugeVertical"])
                 if "showFable" in d: s.show_fable = to_bool(d["showFable"])
                 if "gaugeSweep" in d: s.gauge_sweep = to_bool(d["gaugeSweep"])
+                if "showCredits" in d: s.show_credits = to_bool(d["showCredits"])
                 if "opacity" in d: s.opacity = min(1.0, max(0.3, float(d["opacity"])))
                 if "x" in d: s.x = int(d["x"])
                 if "y" in d: s.y = int(d["y"])
@@ -187,6 +189,7 @@ class Settings:
                 "gaugeVertical": self.gauge_vertical,
                 "showFable": self.show_fable,
                 "gaugeSweep": self.gauge_sweep,
+                "showCredits": self.show_credits,
                 "topMost": self.top_most,
                 "opacity": self.opacity,
                 "x": self.x,
@@ -205,6 +208,7 @@ class UsageWindow:
         self.present = False
         self.utilization = 0.0  # 0-100
         self.resets_at = None  # ローカル時刻（naive）
+        self.detail = None  # リセット時刻の代わりに出す文字の行（追加クレジットの金額など）
 
 
 class UsageResult:
@@ -212,6 +216,7 @@ class UsageResult:
         self.five_hour = UsageWindow()
         self.weekly = UsageWindow()
         self.weekly_fable = UsageWindow()
+        self.credits = UsageWindow()  # 追加クレジット。有効なときだけ present
         self.error = None
         self.raw_body = None
         self.fetched_at = dt.datetime.now()
@@ -358,6 +363,7 @@ class UsageClient:
         d = json.loads(body)
         r.five_hour = cls._to_window(d, "five_hour")
         r.weekly = cls._to_window(d, "seven_day")
+        r.credits = cls._to_credits(d)
 
         # モデル別の週間枠は limits[] に { scope: { model: { display_name } }, percent, resets_at } で入っている
         limits = d.get("limits")
@@ -385,6 +391,41 @@ class UsageClient:
                     r.weekly_fable = w
                     return
 
+    # 追加クレジットは spend に { enabled, used/limit: { amount_minor, exponent, currency } } で入っている。
+    # 無いときは extra_usage { is_enabled, used_credits, monthly_limit, decimal_places, currency } を使う
+    @staticmethod
+    def _to_credits(d):
+        w = UsageWindow()
+        sp = d.get("spend")
+        ex = d.get("extra_usage")
+        if isinstance(sp, dict) and sp.get("enabled") and isinstance(sp.get("used"), dict):
+            def money(o):
+                if not isinstance(o, dict) or o.get("amount_minor") is None:
+                    return None
+                return float(o["amount_minor"]) / 10 ** int(o.get("exponent") or 0)
+            used, limit = money(sp["used"]), money(sp.get("limit"))
+            currency = sp["used"].get("currency") or "USD"
+            pct = sp.get("percent")
+        elif isinstance(ex, dict) and ex.get("is_enabled") and ex.get("used_credits") is not None:
+            k = 10 ** int(ex.get("decimal_places") or 0)
+            used = float(ex["used_credits"]) / k
+            limit = float(ex["monthly_limit"]) / k if ex.get("monthly_limit") is not None else None
+            currency = ex.get("currency") or "USD"
+            pct = ex.get("utilization")
+        else:
+            return w
+        if used is None:
+            return w
+        w.present = True
+        if limit:
+            w.utilization = used / limit * 100
+        elif pct is not None:
+            w.utilization = float(pct)
+        w.detail = ["使用 " + format_money(used, currency)]
+        if limit is not None:
+            w.detail.append("上限 " + format_money(limit, currency))
+        return w
+
     @staticmethod
     def _to_window(d, key):
         w = UsageWindow()
@@ -397,6 +438,12 @@ class UsageClient:
         if "resets_at" in o:
             w.resets_at = to_local_time(o["resets_at"])
         return w
+
+
+def format_money(v, currency):
+    sym = {"USD": "$", "EUR": "€", "GBP": "£", "JPY": "¥"}.get(currency)
+    digits = 0 if currency == "JPY" else 2
+    return (sym + "{:,.{}f}".format(v, digits)) if sym else "{:,.2f} {}".format(v, currency)
 
 
 def dig(o, *keys):
@@ -990,6 +1037,7 @@ class SettingsDialog(tk.Toplevel):
         self.layout_var = tk.StringVar()
         self.gauge_sweep = tk.BooleanVar()
         self.show_fable = tk.BooleanVar()
+        self.show_credits = tk.BooleanVar()
         self.top_most = tk.BooleanVar()
         self.opacity = tk.DoubleVar()
         self.startup = tk.BooleanVar()
@@ -1028,6 +1076,7 @@ class SettingsDialog(tk.Toplevel):
         self.sweep_check = check("起動時に針を最大まで振り切る（スイープ）", self.gauge_sweep)
         row("", self.sweep_check)
         row("", check("週間制限（Fable）を表示", self.show_fable))
+        row("", check("追加クレジットを表示（有効なときのみ）", self.show_credits))
         row("", check("常に手前に表示", self.top_most))
         op = ttk.Frame(f)
         ttk.Scale(op, from_=30, to=100, length=S(200), variable=self.opacity,
@@ -1057,6 +1106,7 @@ class SettingsDialog(tk.Toplevel):
         self.style_var.set(s.style)
         self.layout_var.set("v" if s.gauge_vertical else "h")
         self.show_fable.set(s.show_fable)
+        self.show_credits.set(s.show_credits)
         self.gauge_sweep.set(s.gauge_sweep)
         self.top_most.set(s.top_most)
         self.opacity.set(round(min(1.0, max(0.3, s.opacity)) * 100))
@@ -1077,6 +1127,7 @@ class SettingsDialog(tk.Toplevel):
         s.style = "gauge" if self.style_var.get() == "gauge" else "bar"
         s.gauge_vertical = self.layout_var.get() == "v"
         s.show_fable = self.show_fable.get()
+        s.show_credits = self.show_credits.get()
         s.gauge_sweep = self.gauge_sweep.get()
         s.top_most = self.top_most.get()
         s.opacity = int(round(self.opacity.get())) / 100.0
@@ -1302,7 +1353,7 @@ class MeterApp:
 
     # snapshot_path を指定すると1回取得して描画を PNG に保存し終了する（動作確認用）。
     # forced_scale > 0 ならモニターの拡大率の代わりにその倍率で描く。
-    # snapshot_style は表示形式の上書き（例: "gauge,vertical,nofable"。保存はしない）。
+    # snapshot_style は表示形式の上書き（例: "gauge,vertical,nofable,nocredits"。保存はしない）。
     def __init__(self, root, snapshot_path=None, forced_scale=0.0, snapshot_style=None):
         self.root = root
         self.snapshot_path = snapshot_path
@@ -1312,6 +1363,7 @@ class MeterApp:
             self.settings.style = "gauge" if "gauge" in opts else "bar"
             self.settings.gauge_vertical = "vertical" in opts
             self.settings.show_fable = "nofable" not in opts
+            self.settings.show_credits = "nocredits" not in opts
         self.events = queue.Queue()  # 別スレッド（取得・トレイ）から tk スレッドへの受け渡し
         self.last = None
         self.fetching = False
@@ -1376,7 +1428,17 @@ class MeterApp:
 
     @property
     def meter_count(self):
-        return 3 if self.settings.show_fable else 2
+        return len(self.meters())
+
+    # 表示するメーター（ラベル, 値）の一覧。追加クレジットは有効なアカウントでだけ出す
+    def meters(self):
+        last = self.last
+        m = [("5時間制限", last.five_hour if last else None), ("週間制限", last.weekly if last else None)]
+        if self.settings.show_fable:
+            m.append(("週間制限（Fable）", last.weekly_fable if last else None))
+        if self.settings.show_credits and last is not None and last.credits.present:
+            m.append(("追加クレジット", last.credits))
+        return m
 
     def size(self):
         if not self.is_gauge:
@@ -1440,13 +1502,19 @@ class MeterApp:
         threading.Thread(target=lambda: self.events.put(UsageClient.fetch()), daemon=True).start()
 
     def _on_result(self, r):
+        count = self.meter_count
         # 失敗時は前回値を残してエラーだけ差し替える
         if r.error is not None and self.last is not None and self.last.error is None:
             self.last.error = r.error
         else:
             self.last = r
         self.fetching = False
-        self.redraw()
+        if self.meter_count != count:  # 追加クレジットの有無が変わったら大きさを合わせる
+            self.resize()
+            if not self.snapshot_path:
+                self.keep_on_screen()
+        else:
+            self.redraw()
         self.update_tray_text()
         if self.snapshot_path:
             self.root.after(500, self.save_snapshot)
@@ -1593,6 +1661,8 @@ class MeterApp:
             t += " 週:%d%%" % round(self.last.weekly.utilization)
         if self.settings.show_fable and self.last.weekly_fable.present:
             t += " Fable:%d%%" % round(self.last.weekly_fable.utilization)
+        if self.settings.show_credits and self.last.credits.present:
+            t += " 追加:%d%%" % round(self.last.credits.utilization)
         self.tray.set_tip(t)
 
     # ---- スイープ ----
@@ -1648,11 +1718,9 @@ class MeterApp:
         status = "更新中…" if self.fetching else (self.last.fetched_at.strftime("%H:%M") + " 更新" if self.last else "")
         self.text(status, "small", Theme.SUB, pad + w, S(10), "ne")
 
-        labels = ["5時間制限", "週間制限"]
-        wins = [self.last.five_hour if self.last else None, self.last.weekly if self.last else None]
-        if self.settings.show_fable:
-            labels.append("週間制限（Fable）")
-            wins.append(self.last.weekly_fable if self.last else None)
+        meters = self.meters()
+        labels = [m[0] for m in meters]
+        wins = [m[1] for m in meters]
 
         y = S(34)
         if self.is_gauge:
@@ -1715,6 +1783,8 @@ class MeterApp:
             sub = ""
         elif not has:
             sub = "データなし"
+        elif win.detail:
+            sub = " / ".join(win.detail)
         elif win.resets_at is not None:
             sub = "リセット " + format_when(win.resets_at) + "（" + format_span(win.resets_at - dt.datetime.now()) + "）"
         else:
@@ -1770,6 +1840,9 @@ class MeterApp:
         if win is not None:
             if not has:
                 self.text("データなし", "small", Theme.SUB, cx, cy + S(50), "n")
+            elif win.detail:
+                for i, line in enumerate(win.detail[:2]):
+                    self.text(line, "small", Theme.SUB, cx, cy + S(50 + 14 * i), "n")
             elif win.resets_at is not None:
                 self.text("リセット " + format_when(win.resets_at), "small", Theme.SUB, cx, cy + S(50), "n")
                 self.text(format_span(win.resets_at - dt.datetime.now()), "small", Theme.SUB, cx, cy + S(64), "n")

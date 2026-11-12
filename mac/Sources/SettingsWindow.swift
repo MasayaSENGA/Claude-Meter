@@ -20,6 +20,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let layoutVertical = NSButton(radioButtonWithTitle: "縦並び", target: nil, action: nil)
     private let gaugeSweep = NSButton(checkboxWithTitle: "起動時に針を最大まで振り切る（スイープ）", target: nil, action: nil)
     private let showFable = NSButton(checkboxWithTitle: "週間制限（Fable）を表示", target: nil, action: nil)
+    private let showCredits = NSButton(checkboxWithTitle: "追加クレジットを表示（有効なときのみ）", target: nil, action: nil)
     private let topMost = NSButton(checkboxWithTitle: "常に手前に表示", target: nil, action: nil)
     private let opacity = NSSlider(value: 95, minValue: 30, maxValue: 100, target: nil, action: nil)
     private let opacityValue = NSTextField(labelWithString: "")
@@ -117,6 +118,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         row("メーターの並び", layoutHorizontal, layoutVertical)
         row("", gaugeSweep)
         row("", showFable)
+        row("", showCredits)
         row("", topMost)
         row("不透明度", opacity, opacityValue)
         row("", startup)
@@ -184,6 +186,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         layoutHorizontal.state = s.gaugeVertical ? .off : .on
         gaugeSweep.state = s.gaugeSweep ? .on : .off
         showFable.state = s.showFable ? .on : .off
+        showCredits.state = s.showCredits ? .on : .off
         topMost.state = s.topMost ? .on : .off
         opacity.doubleValue = (min(1, max(0.3, s.opacity)) * 100).rounded()
         startup.state = startupEnabled ? .on : .off
@@ -203,6 +206,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         s.gaugeVertical = layoutVertical.state == .on
         s.gaugeSweep = gaugeSweep.state == .on
         s.showFable = showFable.state == .on
+        s.showCredits = showCredits.state == .on
         s.topMost = topMost.state == .on
         s.opacity = opacity.doubleValue.rounded() / 100
         return s

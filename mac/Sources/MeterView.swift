@@ -23,7 +23,7 @@ final class MeterView: NSView {
 
     init(settings: Settings) {
         self.settings = settings
-        super.init(frame: NSRect(origin: .zero, size: MeterView.size(for: settings)))
+        super.init(frame: NSRect(origin: .zero, size: MeterView.size(for: settings, result: nil)))
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -32,11 +32,19 @@ final class MeterView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     // メーター部の下にピーク表示（縦並びは2行）とエラー行が入る
-    static func size(for s: Settings) -> NSSize {
-        let n = CGFloat(s.meterCount)
+    static func size(for s: Settings, result: UsageResult?) -> NSSize {
+        let n = CGFloat(meters(s, result).count)
         if !s.isGauge { return NSSize(width: 260, height: 34 + 46 * n + 50) }
         if s.isVertical { return NSSize(width: 170, height: 34 + gaugeRow * n + 56) }
         return NSSize(width: 24 + gaugeCell * n, height: 214)
+    }
+
+    // 表示するメーターのラベルと値。追加クレジットは有効なアカウントでだけ出す
+    static func meters(_ s: Settings, _ result: UsageResult?) -> [(String, UsageWindow?)] {
+        var m: [(String, UsageWindow?)] = [("5時間制限", result?.fiveHour), ("週間制限", result?.weekly)]
+        if s.showFable { m.append(("週間制限（Fable）", result?.weeklyFable)) }
+        if s.showCredits, let c = result?.credits, c.present { m.append(("追加クレジット", c)) }
+        return m
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -60,12 +68,9 @@ final class MeterView: NSView {
         let status = fetching ? "更新中…" : result.map { Format.time($0.fetchedAt) + " 更新" } ?? ""
         drawRight(status, smallFont, Theme.sub, pad + w, 10)
 
-        var labels = ["5時間制限", "週間制限"]
-        var wins: [UsageWindow?] = [result?.fiveHour, result?.weekly]
-        if settings.showFable {
-            labels.append("週間制限（Fable）")
-            wins.append(result?.weeklyFable)
-        }
+        let meters = MeterView.meters(settings, result)
+        let labels = meters.map { $0.0 }
+        let wins = meters.map { $0.1 }
 
         var y: CGFloat = 34
         if settings.isGauge {
@@ -131,6 +136,7 @@ final class MeterView: NSView {
     private func subText(_ win: UsageWindow?, withSpan: Bool) -> String {
         guard let win else { return "" }
         if !win.present { return "データなし" }
+        if let detail = win.detail { return detail.joined(separator: " / ") }
         guard let reset = win.resetsAt else { return "未使用" }
         let s = "リセット " + Format.when(reset)
         return withSpan ? s + "（" + Format.span(reset.timeIntervalSince(Clock.now)) + "）" : s
@@ -177,7 +183,11 @@ final class MeterView: NSView {
 
         drawCenter(lit ? Format.percent(pct) : "—", pctFont, lit ? Theme.forPercent(pct) : Theme.sub, center.x, center.y + 12)
         drawCenter(label, labelFont, Theme.text, center.x, center.y + 32)
-        if let win {
+        if let win, win.present, let detail = win.detail {
+            for (i, s) in detail.prefix(2).enumerated() {
+                drawCenter(s, smallFont, Theme.sub, center.x, center.y + 50 + 14 * CGFloat(i))
+            }
+        } else if let win {
             drawCenter(subText(win, withSpan: false), smallFont, Theme.sub, center.x, center.y + 50)
             if win.present, let reset = win.resetsAt {
                 drawCenter(Format.span(reset.timeIntervalSince(Clock.now)), smallFont, Theme.sub, center.x, center.y + 64)

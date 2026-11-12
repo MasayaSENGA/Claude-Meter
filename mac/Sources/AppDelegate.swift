@@ -70,6 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         view.fetching = true
         view.needsDisplay = true
         Task {
+            let count = MeterView.meters(settings, last).count
             let r = await UsageClient.shared.fetch()
             // 失敗時は前回値を残してエラーだけ差し替える
             if r.error != nil, var prev = last, prev.error == nil {
@@ -81,6 +82,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             fetching = false
             view.fetching = false
             view.result = last
+            // 追加クレジットの有無が変わったら大きさを合わせる
+            if MeterView.meters(settings, last).count != count { resizeKeepingOnScreen() }
             view.needsDisplay = true
             updateToolTip()
         }
@@ -101,6 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         if last.fiveHour.present { s += " 5h:" + Format.percent(last.fiveHour.utilization) }
         if last.weekly.present { s += " 週:" + Format.percent(last.weekly.utilization) }
         if settings.showFable && last.weeklyFable.present { s += " Fable:" + Format.percent(last.weeklyFable.utilization) }
+        if settings.showCredits && last.credits.present { s += " 追加:" + Format.percent(last.credits.utilization) }
         statusItem.button?.toolTip = s
     }
 
@@ -144,7 +148,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
     // 大きさが変わったら左上を保ったまま変え、画面外にはみ出さないよう戻す
     private func resizeKeepingOnScreen() {
-        let size = MeterView.size(for: settings)
+        let size = MeterView.size(for: settings, result: last)
         let old = panel.frame
         var f = NSRect(x: old.minX, y: old.maxY - size.height, width: size.width, height: size.height)
         if let vf = (panel.screen ?? NSScreen.main)?.visibleFrame {

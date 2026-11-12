@@ -46,10 +46,11 @@ User-Agent: ClaudeMeter/1.0
 | 5時間制限 | `five_hour.utilization`（0〜100 の割合）と `five_hour.resets_at` |
 | 週間制限 | `seven_day.utilization` と `seven_day.resets_at` |
 | 週間制限（Fable） | `limits[]` のうち `scope.model.display_name` に "fable" を含む（大文字小文字は区別しない）最初の要素の `percent` と `resets_at`。見つからなければ、念のためトップレベルのキー名に "fable" を含むオブジェクト（例 `seven_day_fable`）の `utilization` を探す |
+| 追加クレジット | `spend.enabled` が true なら `spend.used` / `spend.limit`（`amount_minor` ÷ 10^`exponent`、通貨は `currency`）。`spend` が無ければ `extra_usage`（`is_enabled`、`used_credits` / `monthly_limit` ÷ 10^`decimal_places`）。使用率は使用額 ÷ 上限。リセット時刻の代わりに「使用 $0.00」「上限 $100.00」を出す。無効なときはメーターごと表示しない |
 
 - `utilization` / `percent` が無いか `null` のときは「データなし」扱い。
 - `resets_at` は ISO 8601 文字列が基本。数値（UNIX 秒）で来る場合も受け付ける。`null` なら「未使用」と表示する。
-- 他にも多数のキー（`seven_day_opus`、`extra_usage` など）が来るが無視してよい。
+- 他にも多数のキー（`seven_day_opus` など）が来るが無視してよい。
 
 ### 2.3 ログイン情報（macOS で一番の違い）
 
@@ -241,7 +242,7 @@ AppKit の `NSView` は左下原点なので、`isFlipped = true` にするか�
 6. （区切り線）
 7. 終了
 
-- メニューバーのアイコンにカーソルを当てたときの表示（Windows 版のトレイのツールチップ相当）: `Claude 5h:24% 週:5% Fable:0%`（Fable 非表示なら Fable 部分を省く）。
+- メニューバーのアイコンにカーソルを当てたときの表示（Windows 版のトレイのツールチップ相当）: `Claude 5h:24% 週:5% Fable:0%`（Fable 非表示なら Fable 部分を省く。追加クレジットを表示しているときは末尾に ` 追加:0%`）。
 - Windows 版ではトレイアイコンの左クリックで表示／非表示を切り替える。
 
 ## 7. 設定
@@ -259,6 +260,7 @@ AppKit の `NSView` は左下原点なので、`isFlipped = true` にするか�
 | gaugeVertical | 真偽 | false | メーターの並び（横並び／縦並び）※スピードメーターのときだけ選べる |
 | gaugeSweep | 真偽 | true | 起動時に針を最大まで振り切る（スイープ）※スピードメーターのときだけ選べる |
 | showFable | 真偽 | true | 週間制限（Fable）を表示 |
+| showCredits | 真偽 | true | 追加クレジットを表示（有効なときのみ） |
 | topMost | 真偽 | true | 常に手前に表示 |
 | opacity | 小数 0.3〜1.0 | 0.95 | 不透明度（スライダー、% 表示） |
 | x / y | 整数 | -1（未保存） | ウィンドウ位置（画面には出さない） |
