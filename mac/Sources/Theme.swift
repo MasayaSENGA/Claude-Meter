@@ -51,6 +51,15 @@ enum Format {
         return "\(f.string(from: t))(\(dow)) \(time(t))"
     }
 
+    // 小さいスピードメーター用: 今日なら HH:mm、それ以外は M/d HH:mm（曜日なし）
+    static func whenShort(_ t: Date) -> String {
+        if Calendar.current.isDate(t, inSameDayAs: Clock.now) { return time(t) }
+        let f = DateFormatter()
+        f.locale = posix
+        f.dateFormat = "M/d"
+        return "\(f.string(from: t)) \(time(t))"
+    }
+
     static func span(_ s: TimeInterval) -> String {
         if s < 60 { return "まもなく" }
         let minutes = Int(s / 60)

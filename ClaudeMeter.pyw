@@ -1332,6 +1332,12 @@ def format_when(t):
     return "%d/%d(%s) %s" % (t.month, t.day, DOW[t.weekday()], t.strftime("%H:%M"))
 
 
+def format_when_short(t):
+    if t.date() == dt.datetime.now().date():
+        return t.strftime("%H:%M")
+    return "%d/%d %s" % (t.month, t.day, t.strftime("%H:%M"))
+
+
 def format_span(d):
     s = d.total_seconds()
     if s < 60:
@@ -1345,6 +1351,7 @@ def format_span(d):
 
 class MeterApp:
     GAUGE_CELL, GAUGE_ROW = 130, 134
+    SMALL_CELL, SMALL_ROW = 73, 94  # 半分の大きさのスピードメーター（週間制限（Fable）・追加クレジット）
     # 起動時のスイープ（針が一度最大まで振り切ってから実際の値に戻る）
     SWEEP_UP, SWEEP_HOLD, SWEEP_DOWN = 0.7, 0.2, 0.8  # 秒
     # スピードメーター: 左下(0%)から右下(100%)まで 240° の文字盤と針（角度は時計回り、3時方向が 0°）
@@ -1430,24 +1437,29 @@ class MeterApp:
     def meter_count(self):
         return len(self.meters())
 
-    # 表示するメーター（ラベル, 値）の一覧。追加クレジットは有効なアカウントでだけ出す
+    # 表示するメーター（ラベル, 値, 小さく描くか）の一覧。追加クレジットは有効なアカウントでだけ出す。
+    # スピードメーター表示では週間制限（Fable）と追加クレジットを半分の大きさにして、最後に横に並べる
     def meters(self):
         last = self.last
-        m = [("5時間制限", last.five_hour if last else None), ("週間制限", last.weekly if last else None)]
+        small = self.is_gauge
+        m = [("5時間制限", last.five_hour if last else None, False),
+             ("週間制限", last.weekly if last else None, False)]
         if self.settings.show_fable:
-            m.append(("週間制限（Fable）", last.weekly_fable if last else None))
+            m.append(("Fable" if small else "週間制限（Fable）", last.weekly_fable if last else None, small))
         if self.settings.show_credits and last is not None and last.credits.present:
-            m.append(("追加クレジット", last.credits))
+            m.append(("追加" if small else "追加クレジット", last.credits, small))
         return m
 
     def size(self):
+        big = sum(1 for m in self.meters() if not m[2])
+        small = self.meter_count - big
         if not self.is_gauge:
             w, h = 260, 34 + 46 * self.meter_count + 50
         elif self.is_vertical:
             # メーター部の下にピーク表示（縦並びは2行）とエラー行が入る
-            w, h = 24 + 146, 34 + self.GAUGE_ROW * self.meter_count + 56
+            w, h = 24 + 146, 34 + self.GAUGE_ROW * big + (self.SMALL_ROW if small else 0) + 56
         else:
-            w, h = 24 + self.GAUGE_CELL * self.meter_count, 214
+            w, h = 24 + self.GAUGE_CELL * big + self.SMALL_CELL * small, 214
         return self.S(w), self.S(h)
 
     def apply_scale(self, scale):
@@ -1511,8 +1523,7 @@ class MeterApp:
         self.fetching = False
         if self.meter_count != count:  # 追加クレジットの有無が変わったら大きさを合わせる
             self.resize()
-            if not self.snapshot_path:
-                self.keep_on_screen()
+            self.keep_on_screen()  # 動作確認では位置を保存しない（save_position が何もしない）
         else:
             self.redraw()
         self.update_tray_text()
@@ -1719,23 +1730,32 @@ class MeterApp:
         self.text(status, "small", Theme.SUB, pad + w, S(10), "ne")
 
         meters = self.meters()
-        labels = [m[0] for m in meters]
-        wins = [m[1] for m in meters]
+        big = [m for m in meters if not m[2]]
+        small = [m for m in meters if m[2]]
 
         y = S(34)
         if self.is_gauge:
-            cw = w if self.is_vertical else w // len(labels)
-            for i, label in enumerate(labels):
-                if self.is_vertical:
-                    self.draw_gauge(label, wins[i], pad, y, cw)
+            sw = S(self.SMALL_CELL)
+            if self.is_vertical:
+                for label, win, _ in big:
+                    self.draw_gauge(label, win, pad, y, w)
                     y += S(self.GAUGE_ROW)
-                else:
-                    self.draw_gauge(label, wins[i], pad + cw * i, y, cw)
-            if not self.is_vertical:
+                x0 = pad + (w - sw * len(small)) // 2  # 小さいメーターは中央に寄せて横に並べる
+                for i, (label, win, _) in enumerate(small):
+                    self.draw_gauge(label, win, x0 + sw * i, y, sw, True)
+                if small:
+                    y += S(self.SMALL_ROW)
+            else:
+                cw = (w - sw * len(small)) // len(big)
+                for i, (label, win, _) in enumerate(big):
+                    self.draw_gauge(label, win, pad + cw * i, y, cw)
+                oy = S(self.GAUGE_ROW - self.SMALL_ROW) // 2  # 大きいメーターと上下の中央をそろえる
+                for i, (label, win, _) in enumerate(small):
+                    self.draw_gauge(label, win, pad + cw * len(big) + sw * i, y + oy, sw, True)
                 y += S(self.GAUGE_ROW)
         else:
-            for i, label in enumerate(labels):
-                self.draw_meter(label, wins[i], pad, y, w)
+            for label, win, _ in meters:
+                self.draw_meter(label, win, pad, y, w)
                 y += S(46)
 
         # ピーク／オフピーク
@@ -1797,8 +1817,10 @@ class MeterApp:
     def arc(self, cx, cy, r, start, sweep, c, width, alpha=255):
         self.painter.arc(cx - r, cy - r, r * 2, r * 2, start, sweep, c, width, alpha)
 
-    def draw_gauge(self, label, win, x, y, cw):
-        S = self.S
+    # small=True なら文字盤を半分の大きさにし、ラベルと下の2行を小さい文字で詰めて描く
+    def draw_gauge(self, label, win, x, y, cw, small=False):
+        k = 0.5 if small else 1.0
+        S = lambda v: self.S(v * k)  # 文字盤の寸法は k 倍
         pt = self.painter
         has = win is not None and win.present
         pct = max(0.0, min(100.0, win.utilization)) if has else 0.0
@@ -1806,48 +1828,56 @@ class MeterApp:
         if self.sweeping:
             pct = self.sweep_value(pct)
         r = S(44)
-        cx, cy = x + cw / 2, y + r + S(4)
+        cx, cy = x + cw / 2, y + r + self.S(4)
 
         # 目盛りの外側に 70〜90% を黄、90〜100% を赤の帯で示す
-        zr = r + S(4)
-        self.arc(cx, cy, zr, self.angle(70), self.GAUGE_SWEEP * 0.2, Theme.WARN, S(2), 150)
-        self.arc(cx, cy, zr, self.angle(90), self.GAUGE_SWEEP * 0.1, Theme.DANGER, S(2), 170)
+        zr = r + max(2, S(4))
+        zw = max(1, S(2))
+        self.arc(cx, cy, zr, self.angle(70), self.GAUGE_SWEEP * 0.2, Theme.WARN, zw, 150)
+        self.arc(cx, cy, zr, self.angle(90), self.GAUGE_SWEEP * 0.1, Theme.DANGER, zw, 170)
 
         self.arc(cx, cy, r, self.GAUGE_START, self.GAUGE_SWEEP, Theme.TRACK, S(7))
         value_sweep = self.GAUGE_SWEEP * pct / 100
         if lit and value_sweep >= 0.5:  # GDI+ は極小角度の DrawArc で失敗することがある
             self.arc(cx, cy, r, self.GAUGE_START, value_sweep, Theme.for_percent(pct), S(7))
 
-        # 10% ごとの目盛り（0・50・100% は長く）
+        # 10% ごとの目盛り（0・50・100% は長く）。小さい文字盤は 0・50・100% だけ
         for i in range(11):
             major = i % 5 == 0
+            if small and not major:
+                continue
             a = math.radians(self.angle(i * 10))
             r1, r2 = r - S(15 if major else 11), r - S(6)
             pt.line(cx + math.cos(a) * r1, cy + math.sin(a) * r1, cx + math.cos(a) * r2, cy + math.sin(a) * r2,
-                    Theme.TEXT if major else Theme.SUB, S(2) if major else max(1, S(1)))
+                    Theme.TEXT if major else Theme.SUB, max(1, S(2)) if major else max(1, S(1)))
 
         # 針
         na = math.radians(self.angle(pct))
         nl = r - S(13)
         pt.line(cx, cy, cx + math.cos(na) * nl, cy + math.sin(na) * nl, Theme.TEXT if lit else Theme.SUB,
-                max(2, S(2.5)), round_cap=True)
-        hub = S(5)
+                max(1.5, S(2.5)), round_cap=True)
+        hub = max(2, S(5))
         pt.ellipse(cx - hub, cy - hub, hub * 2, hub * 2, Theme.for_percent(pct) if lit else Theme.SUB)
 
+        # 文字の位置（中心からの下方向）: 使用率, ラベル, 1行目, 2行目
+        S = self.S
+        o_pct, o_label, o_sub1, o_sub2 = (5, 22, 36, 49) if small else (12, 32, 50, 64)
         self.text("%d%%" % round(pct) if lit else "—", "pct", Theme.for_percent(pct) if lit else Theme.SUB,
-                  cx, cy + S(12), "n")
-        self.text(label, "label", Theme.TEXT, cx, cy + S(32), "n")
-        if win is not None:
-            if not has:
-                self.text("データなし", "small", Theme.SUB, cx, cy + S(50), "n")
-            elif win.detail:
-                for i, line in enumerate(win.detail[:2]):
-                    self.text(line, "small", Theme.SUB, cx, cy + S(50 + 14 * i), "n")
-            elif win.resets_at is not None:
-                self.text("リセット " + format_when(win.resets_at), "small", Theme.SUB, cx, cy + S(50), "n")
-                self.text(format_span(win.resets_at - dt.datetime.now()), "small", Theme.SUB, cx, cy + S(64), "n")
-            else:
-                self.text("未使用", "small", Theme.SUB, cx, cy + S(50), "n")
+                  cx, cy + S(o_pct), "n")
+        self.text(label, "small" if small else "label", Theme.TEXT, cx, cy + S(o_label), "n")
+        if win is None:
+            return
+        if not has:
+            lines = ["データなし"]
+        elif win.detail:
+            lines = win.detail[:2]
+        elif win.resets_at is not None:
+            span = format_span(win.resets_at - dt.datetime.now())
+            lines = [format_when_short(win.resets_at), span] if small else ["リセット " + format_when(win.resets_at), span]
+        else:
+            lines = ["未使用"]
+        for i, line in enumerate(lines):
+            self.text(line, "small", Theme.SUB, cx, cy + S(o_sub2 if i else o_sub1), "n")
 
 
 def main():

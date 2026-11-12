@@ -15,6 +15,7 @@ final class MeterView: NSView {
     var sweeping: Bool { sweepStart != nil || sweepElapsedOverride != nil }
 
     static let gaugeCell: CGFloat = 130, gaugeRow: CGFloat = 134
+    static let smallCell: CGFloat = 73, smallRow: CGFloat = 94 // 半分の大きさのスピードメーター
 
     private let titleFont = NSFont.systemFont(ofSize: 12, weight: .bold)
     private let labelFont = NSFont.systemFont(ofSize: 12)
@@ -33,17 +34,23 @@ final class MeterView: NSView {
 
     // メーター部の下にピーク表示（縦並びは2行）とエラー行が入る
     static func size(for s: Settings, result: UsageResult?) -> NSSize {
-        let n = CGFloat(meters(s, result).count)
+        let all = meters(s, result)
+        let n = CGFloat(all.count)
+        let small = CGFloat(all.filter { $0.small }.count)
         if !s.isGauge { return NSSize(width: 260, height: 34 + 46 * n + 50) }
-        if s.isVertical { return NSSize(width: 170, height: 34 + gaugeRow * n + 56) }
-        return NSSize(width: 24 + gaugeCell * n, height: 214)
+        if s.isVertical { return NSSize(width: 170, height: 34 + gaugeRow * (n - small) + (small > 0 ? smallRow : 0) + 56) }
+        return NSSize(width: 24 + gaugeCell * (n - small) + smallCell * small, height: 214)
     }
 
-    // 表示するメーターのラベルと値。追加クレジットは有効なアカウントでだけ出す
-    static func meters(_ s: Settings, _ result: UsageResult?) -> [(String, UsageWindow?)] {
-        var m: [(String, UsageWindow?)] = [("5時間制限", result?.fiveHour), ("週間制限", result?.weekly)]
-        if s.showFable { m.append(("週間制限（Fable）", result?.weeklyFable)) }
-        if s.showCredits, let c = result?.credits, c.present { m.append(("追加クレジット", c)) }
+    typealias Meter = (label: String, win: UsageWindow?, small: Bool)
+
+    // 表示するメーターの一覧。追加クレジットは有効なアカウントでだけ出す。
+    // スピードメーター表示では週間制限（Fable）と追加クレジットを半分の大きさ（small）にして、最後に横に並べる
+    static func meters(_ s: Settings, _ result: UsageResult?) -> [Meter] {
+        let small = s.isGauge
+        var m: [Meter] = [("5時間制限", result?.fiveHour, false), ("週間制限", result?.weekly, false)]
+        if s.showFable { m.append((small ? "Fable" : "週間制限（Fable）", result?.weeklyFable, small)) }
+        if s.showCredits, let c = result?.credits, c.present { m.append((small ? "追加" : "追加クレジット", c, small)) }
         return m
     }
 
@@ -69,24 +76,32 @@ final class MeterView: NSView {
         drawRight(status, smallFont, Theme.sub, pad + w, 10)
 
         let meters = MeterView.meters(settings, result)
-        let labels = meters.map { $0.0 }
-        let wins = meters.map { $0.1 }
+        let big = meters.filter { !$0.small }
+        let small = meters.filter { $0.small }
 
         var y: CGFloat = 34
         if settings.isGauge {
-            let cw = settings.isVertical ? w : w / CGFloat(labels.count)
-            for i in labels.indices {
-                if settings.isVertical {
-                    drawGauge(labels[i], wins[i], pad, y, cw)
+            let sw = MeterView.smallCell
+            if settings.isVertical {
+                for m in big {
+                    drawGauge(m.label, m.win, pad, y, w, small: false)
                     y += MeterView.gaugeRow
-                } else {
-                    drawGauge(labels[i], wins[i], pad + cw * CGFloat(i), y, cw)
                 }
+                let x0 = pad + (w - sw * CGFloat(small.count)) / 2 // 小さいメーターは中央に寄せて横に並べる
+                for (i, m) in small.enumerated() { drawGauge(m.label, m.win, x0 + sw * CGFloat(i), y, sw, small: true) }
+                if !small.isEmpty { y += MeterView.smallRow }
+            } else {
+                let cw = (w - sw * CGFloat(small.count)) / CGFloat(big.count)
+                for (i, m) in big.enumerated() { drawGauge(m.label, m.win, pad + cw * CGFloat(i), y, cw, small: false) }
+                let oy = (MeterView.gaugeRow - MeterView.smallRow) / 2 // 大きいメーターと上下の中央をそろえる
+                for (i, m) in small.enumerated() {
+                    drawGauge(m.label, m.win, pad + cw * CGFloat(big.count) + sw * CGFloat(i), y + oy, sw, small: true)
+                }
+                y += MeterView.gaugeRow
             }
-            if !settings.isVertical { y += MeterView.gaugeRow }
         } else {
-            for i in labels.indices {
-                drawBar(labels[i], wins[i], pad, y, w)
+            for m in meters {
+                drawBar(m.label, m.win, pad, y, w)
                 y += 46
             }
         }
@@ -151,47 +166,54 @@ final class MeterView: NSView {
 
     private static func angle(_ pct: Double) -> CGFloat { gaugeStart + gaugeSweep * CGFloat(pct) / 100 }
 
-    private func drawGauge(_ label: String, _ win: UsageWindow?, _ x: CGFloat, _ y: CGFloat, _ cw: CGFloat) {
+    // small なら文字盤を半分の大きさにし、ラベルと下の2行を小さい文字で詰めて描く
+    private func drawGauge(_ label: String, _ win: UsageWindow?, _ x: CGFloat, _ y: CGFloat, _ cw: CGFloat, small: Bool) {
+        let k: CGFloat = small ? 0.5 : 1 // 文字盤の寸法の倍率
         let has = win?.present ?? false
         var pct = has ? max(0, min(100, win!.utilization)) : 0
         let lit = has || sweeping // スイープ中はデータ未取得でも文字盤を点灯させる
         if sweeping { pct = sweepValue(pct) }
-        let r: CGFloat = 44
+        let r = 44 * k
         let center = NSPoint(x: x + cw / 2, y: y + r + 4)
 
         // 目盛りの外側に 70〜90% を黄、90〜100% を赤の帯で示す
-        arc(center, r + 4, from: 70, to: 90, width: 2, color: Theme.warn.withAlphaComponent(150 / 255))
-        arc(center, r + 4, from: 90, to: 100, width: 2, color: Theme.danger.withAlphaComponent(170 / 255))
+        let zr = r + max(2, 4 * k), zw = max(1, 2 * k)
+        arc(center, zr, from: 70, to: 90, width: zw, color: Theme.warn.withAlphaComponent(150 / 255))
+        arc(center, zr, from: 90, to: 100, width: zw, color: Theme.danger.withAlphaComponent(170 / 255))
 
-        arc(center, r, from: 0, to: 100, width: 7, color: Theme.track)
-        if lit && pct > 0 { arc(center, r, from: 0, to: pct, width: 7, color: Theme.forPercent(pct)) }
+        arc(center, r, from: 0, to: 100, width: 7 * k, color: Theme.track)
+        if lit && pct > 0 { arc(center, r, from: 0, to: pct, width: 7 * k, color: Theme.forPercent(pct)) }
 
-        // 10% ごとの目盛り（0・50・100% は長く）
+        // 10% ごとの目盛り（0・50・100% は長く）。小さい文字盤は 0・50・100% だけ
         for i in 0...10 {
             let major = i % 5 == 0
+            if small && !major { continue }
             let a = MeterView.angle(Double(i * 10)) * .pi / 180
-            line(center, a, from: r - (major ? 15 : 11), to: r - 6,
-                 width: major ? 2 : 1, color: major ? Theme.text : Theme.sub, round: false)
+            line(center, a, from: r - (major ? 15 : 11) * k, to: r - 6 * k,
+                 width: max(1, (major ? 2 : 1) * k), color: major ? Theme.text : Theme.sub, round: false)
         }
 
         // 針
-        line(center, MeterView.angle(pct) * .pi / 180, from: 0, to: r - 13,
-             width: 2.5, color: lit ? Theme.text : Theme.sub, round: true)
-        let hub: CGFloat = 5
+        line(center, MeterView.angle(pct) * .pi / 180, from: 0, to: r - 13 * k,
+             width: max(1.5, 2.5 * k), color: lit ? Theme.text : Theme.sub, round: true)
+        let hub = max(2, 5 * k)
         (lit ? Theme.forPercent(pct) : Theme.sub).setFill()
         NSBezierPath(ovalIn: NSRect(x: center.x - hub, y: center.y - hub, width: hub * 2, height: hub * 2)).fill()
 
-        drawCenter(lit ? Format.percent(pct) : "—", pctFont, lit ? Theme.forPercent(pct) : Theme.sub, center.x, center.y + 12)
-        drawCenter(label, labelFont, Theme.text, center.x, center.y + 32)
-        if let win, win.present, let detail = win.detail {
-            for (i, s) in detail.prefix(2).enumerated() {
-                drawCenter(s, smallFont, Theme.sub, center.x, center.y + 50 + 14 * CGFloat(i))
-            }
-        } else if let win {
-            drawCenter(subText(win, withSpan: false), smallFont, Theme.sub, center.x, center.y + 50)
-            if win.present, let reset = win.resetsAt {
-                drawCenter(Format.span(reset.timeIntervalSince(Clock.now)), smallFont, Theme.sub, center.x, center.y + 64)
-            }
+        // 文字の位置（中心からの下方向）: 使用率, ラベル, 1行目, 2行目
+        let (oPct, oLabel, oSub1, oSub2): (CGFloat, CGFloat, CGFloat, CGFloat) = small ? (5, 22, 36, 49) : (12, 32, 50, 64)
+        drawCenter(lit ? Format.percent(pct) : "—", pctFont, lit ? Theme.forPercent(pct) : Theme.sub, center.x, center.y + oPct)
+        drawCenter(label, small ? smallFont : labelFont, Theme.text, center.x, center.y + oLabel)
+        guard let win else { return }
+        var lines: [String]
+        if !win.present { lines = ["データなし"] }
+        else if let detail = win.detail { lines = detail }
+        else if let reset = win.resetsAt {
+            let span = Format.span(reset.timeIntervalSince(Clock.now))
+            lines = small ? [Format.whenShort(reset), span] : ["リセット " + Format.when(reset), span]
+        } else { lines = ["未使用"] }
+        for (i, s) in lines.prefix(2).enumerated() {
+            drawCenter(s, smallFont, Theme.sub, center.x, center.y + (i == 0 ? oSub1 : oSub2))
         }
     }
 

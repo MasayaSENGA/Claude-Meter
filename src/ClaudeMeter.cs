@@ -967,33 +967,42 @@ namespace ClaudeMeter
         Font titleFont, labelFont, pctFont, smallFont;
         bool IsGauge { get { return settings.Style == "gauge"; } }
         bool IsVertical { get { return IsGauge && settings.GaugeVertical; } }
-        int MeterCount { get { List<UsageWindow> wins; return Meters(out wins).Count; } }
+        int MeterCount { get { return Meters().Count; } }
+        int SmallCount { get { return Meters().FindAll(m => m.Small).Count; } }
 
-        // 表示するメーターのラベルと値。追加クレジットは有効なアカウントでだけ出す
-        List<string> Meters(out List<UsageWindow> wins)
+        class Meter
         {
-            var labels = new List<string> { "5時間制限", "週間制限" };
-            wins = new List<UsageWindow> { last == null ? null : last.FiveHour, last == null ? null : last.Weekly };
-            if (settings.ShowFable)
+            public string Label;
+            public UsageWindow Win;
+            public bool Small; // 半分の大きさのスピードメーターで描く
+            public Meter(string label, UsageWindow win, bool small) { Label = label; Win = win; Small = small; }
+        }
+
+        // 表示するメーターの一覧。追加クレジットは有効なアカウントでだけ出す。
+        // スピードメーター表示では週間制限（Fable）と追加クレジットを半分の大きさにして、最後に横に並べる
+        List<Meter> Meters()
+        {
+            bool small = IsGauge;
+            var m = new List<Meter>
             {
-                labels.Add("週間制限（Fable）");
-                wins.Add(last == null ? null : last.WeeklyFable);
-            }
+                new Meter("5時間制限", last == null ? null : last.FiveHour, false),
+                new Meter("週間制限", last == null ? null : last.Weekly, false),
+            };
+            if (settings.ShowFable) m.Add(new Meter(small ? "Fable" : "週間制限（Fable）", last == null ? null : last.WeeklyFable, small));
             if (settings.ShowCredits && last != null && last.Credits.Present)
-            {
-                labels.Add("追加クレジット");
-                wins.Add(last.Credits);
-            }
-            return labels;
+                m.Add(new Meter(small ? "追加" : "追加クレジット", last.Credits, small));
+            return m;
         }
         const int GaugeCell = 130, GaugeRow = 134;
+        const int SmallCell = 73, SmallRow = 94; // 半分の大きさのスピードメーター
 
         int BaseWidth
         {
             get
             {
                 if (!IsGauge) return 260;
-                return 24 + (IsVertical ? 146 : GaugeCell * MeterCount);
+                int small = SmallCount;
+                return 24 + (IsVertical ? 146 : GaugeCell * (MeterCount - small) + SmallCell * small);
             }
         }
 
@@ -1003,7 +1012,8 @@ namespace ClaudeMeter
             get
             {
                 if (!IsGauge) return 34 + 46 * MeterCount + 50;
-                if (IsVertical) return 34 + GaugeRow * MeterCount + 56;
+                int small = SmallCount;
+                if (IsVertical) return 34 + GaugeRow * (MeterCount - small) + (small > 0 ? SmallRow : 0) + 56;
                 return 214;
             }
         }
@@ -1189,23 +1199,34 @@ namespace ClaudeMeter
             string status = fetching ? "更新中…" : (last != null ? last.FetchedAt.ToString("HH:mm") + " 更新" : "");
             DrawRight(g, status, smallFont, Theme.Sub, pad + w, S(10));
 
-            List<UsageWindow> wins;
-            var labels = Meters(out wins);
+            var meters = Meters();
+            var big = meters.FindAll(m => !m.Small);
+            var small = meters.FindAll(m => m.Small);
 
             int y = S(34);
             if (IsGauge)
             {
-                int cw = IsVertical ? w : w / labels.Count;
-                for (int i = 0; i < labels.Count; i++)
+                int sw = S(SmallCell);
+                if (IsVertical)
                 {
-                    if (IsVertical) { DrawGauge(g, labels[i], wins[i], pad, y, cw); y += S(GaugeRow); }
-                    else DrawGauge(g, labels[i], wins[i], pad + cw * i, y, cw);
+                    foreach (var m in big) { DrawGauge(g, m.Label, m.Win, pad, y, w, false); y += S(GaugeRow); }
+                    int x0 = pad + (w - sw * small.Count) / 2; // 小さいメーターは中央に寄せて横に並べる
+                    for (int i = 0; i < small.Count; i++) DrawGauge(g, small[i].Label, small[i].Win, x0 + sw * i, y, sw, true);
+                    if (small.Count > 0) y += S(SmallRow);
                 }
-                if (!IsVertical) y += S(GaugeRow);
+                else
+                {
+                    int cw = (w - sw * small.Count) / big.Count;
+                    for (int i = 0; i < big.Count; i++) DrawGauge(g, big[i].Label, big[i].Win, pad + cw * i, y, cw, false);
+                    int oy = S(GaugeRow - SmallRow) / 2; // 大きいメーターと上下の中央をそろえる
+                    for (int i = 0; i < small.Count; i++)
+                        DrawGauge(g, small[i].Label, small[i].Win, pad + cw * big.Count + sw * i, y + oy, sw, true);
+                    y += S(GaugeRow);
+                }
             }
             else
             {
-                for (int i = 0; i < labels.Count; i++) { DrawMeter(g, labels[i], wins[i], pad, y, w); y += S(46); }
+                foreach (var m in meters) { DrawMeter(g, m.Label, m.Win, pad, y, w); y += S(46); }
             }
 
             // ピーク／オフピーク
@@ -1259,65 +1280,75 @@ namespace ClaudeMeter
         // スピードメーター: 左下(0%)から右下(100%)まで 240° の文字盤と針
         const float GaugeStart = 150f, GaugeSweep = 240f;
 
-        void DrawGauge(Graphics g, string label, UsageWindow win, int x, int y, int cw)
+        // small なら文字盤を半分の大きさにし、ラベルと下の2行を小さい文字で詰めて描く
+        void DrawGauge(Graphics g, string label, UsageWindow win, int x, int y, int cw, bool small)
         {
+            float k = small ? 0.5f : 1f; // 文字盤の寸法の倍率
             bool has = win != null && win.Present;
             double pct = has ? Math.Max(0, Math.Min(100, win.Utilization)) : 0;
             bool lit = has || sweeping; // スイープ中はデータ未取得でも文字盤を点灯させる
             if (sweeping) pct = SweepValue(pct);
-            float r = S(44);
+            float r = S(44 * k);
             float cx = x + cw / 2f, cy = y + r + S(4);
             var dial = new RectangleF(cx - r, cy - r, r * 2, r * 2);
 
             // 目盛りの外側に 70〜90% を黄、90〜100% を赤の帯で示す
-            float zr = r + S(4);
+            float zr = r + Math.Max(2, S(4 * k));
+            float zw = Math.Max(1, S(2 * k));
             var zone = new RectangleF(cx - zr, cy - zr, zr * 2, zr * 2);
-            using (var p = new Pen(Color.FromArgb(150, Theme.Warn), S(2))) g.DrawArc(p, zone, Angle(70), GaugeSweep * 0.2f);
-            using (var p = new Pen(Color.FromArgb(170, Theme.Danger), S(2))) g.DrawArc(p, zone, Angle(90), GaugeSweep * 0.1f);
+            using (var p = new Pen(Color.FromArgb(150, Theme.Warn), zw)) g.DrawArc(p, zone, Angle(70), GaugeSweep * 0.2f);
+            using (var p = new Pen(Color.FromArgb(170, Theme.Danger), zw)) g.DrawArc(p, zone, Angle(90), GaugeSweep * 0.1f);
 
-            using (var p = new Pen(Theme.Track, S(7))) g.DrawArc(p, dial, GaugeStart, GaugeSweep);
+            using (var p = new Pen(Theme.Track, S(7 * k))) g.DrawArc(p, dial, GaugeStart, GaugeSweep);
             float valueSweep = (float)(GaugeSweep * pct / 100);
             if (lit && valueSweep >= 0.5f) // GDI+ は極小角度の DrawArc で例外を出すことがある
-                using (var p = new Pen(Theme.ForPercent(pct), S(7))) g.DrawArc(p, dial, GaugeStart, valueSweep);
+                using (var p = new Pen(Theme.ForPercent(pct), S(7 * k))) g.DrawArc(p, dial, GaugeStart, valueSweep);
 
-            // 10% ごとの目盛り（0・50・100% は長く）
+            // 10% ごとの目盛り（0・50・100% は長く）。小さい文字盤は 0・50・100% だけ
             for (int i = 0; i <= 10; i++)
             {
                 bool major = i % 5 == 0;
+                if (small && !major) continue;
                 double a = Angle(i * 10) * Math.PI / 180;
-                float r1 = r - S(major ? 15 : 11), r2 = r - S(6);
-                using (var p = new Pen(major ? Theme.Text : Theme.Sub, major ? S(2) : Math.Max(1, S(1))))
+                float r1 = r - S((major ? 15 : 11) * k), r2 = r - S(6 * k);
+                using (var p = new Pen(major ? Theme.Text : Theme.Sub, Math.Max(1, S((major ? 2 : 1) * k))))
                     g.DrawLine(p, cx + (float)Math.Cos(a) * r1, cy + (float)Math.Sin(a) * r1, cx + (float)Math.Cos(a) * r2, cy + (float)Math.Sin(a) * r2);
             }
 
             // 針
             double na = Angle(pct) * Math.PI / 180;
-            float nl = r - S(13);
-            using (var p = new Pen(lit ? Theme.Text : Theme.Sub, Math.Max(2, S(2.5f))))
+            float nl = r - S(13 * k);
+            using (var p = new Pen(lit ? Theme.Text : Theme.Sub, Math.Max(1.5f, S(2.5f * k))))
             {
                 p.StartCap = LineCap.Round; p.EndCap = LineCap.Round;
                 g.DrawLine(p, cx, cy, cx + (float)Math.Cos(na) * nl, cy + (float)Math.Sin(na) * nl);
             }
-            float hub = S(5);
+            float hub = Math.Max(2, S(5 * k));
             using (var b = new SolidBrush(lit ? Theme.ForPercent(pct) : Theme.Sub)) g.FillEllipse(b, cx - hub, cy - hub, hub * 2, hub * 2);
 
-            DrawCenter(g, lit ? Math.Round(pct).ToString("0") + "%" : "—", pctFont, lit ? Theme.ForPercent(pct) : Theme.Sub, cx, cy + S(12));
-            DrawCenter(g, label, labelFont, Theme.Text, cx, cy + S(32));
-            if (win != null)
+            // 文字の位置（中心からの下方向）: 使用率, ラベル, 1行目, 2行目
+            int oPct = small ? 5 : 12, oLabel = small ? 22 : 32, oSub1 = small ? 36 : 50, oSub2 = small ? 49 : 64;
+            DrawCenter(g, lit ? Math.Round(pct).ToString("0") + "%" : "—", pctFont, lit ? Theme.ForPercent(pct) : Theme.Sub, cx, cy + S(oPct));
+            DrawCenter(g, label, small ? smallFont : labelFont, Theme.Text, cx, cy + S(oLabel));
+            if (win == null) return;
+            string[] lines;
+            if (!has) lines = new[] { "データなし" };
+            else if (win.Detail != null) lines = win.Detail;
+            else if (win.ResetsAt.HasValue)
             {
-                if (!has) DrawCenter(g, "データなし", smallFont, Theme.Sub, cx, cy + S(50));
-                else if (win.Detail != null)
-                {
-                    for (int i = 0; i < win.Detail.Length && i < 2; i++)
-                        DrawCenter(g, win.Detail[i], smallFont, Theme.Sub, cx, cy + S(50 + 14 * i));
-                }
-                else if (win.ResetsAt.HasValue)
-                {
-                    DrawCenter(g, "リセット " + FormatWhen(win.ResetsAt.Value), smallFont, Theme.Sub, cx, cy + S(50));
-                    DrawCenter(g, FormatSpan(win.ResetsAt.Value - DateTime.Now), smallFont, Theme.Sub, cx, cy + S(64));
-                }
-                else DrawCenter(g, "未使用", smallFont, Theme.Sub, cx, cy + S(50));
+                string span = FormatSpan(win.ResetsAt.Value - DateTime.Now);
+                lines = small ? new[] { FormatWhenShort(win.ResetsAt.Value), span }
+                              : new[] { "リセット " + FormatWhen(win.ResetsAt.Value), span };
             }
+            else lines = new[] { "未使用" };
+            for (int i = 0; i < lines.Length && i < 2; i++)
+                DrawCenter(g, lines[i], smallFont, Theme.Sub, cx, cy + S(i == 0 ? oSub1 : oSub2));
+        }
+
+        static string FormatWhenShort(DateTime t)
+        {
+            if (t.Date == DateTime.Now.Date) return t.ToString("HH:mm");
+            return t.ToString("M/d HH:mm");
         }
 
         static float Angle(double pct)
