@@ -220,6 +220,7 @@ class UsageResult:
         self.error = None
         self.raw_body = None
         self.fetched_at = dt.datetime.now()
+        self.source = None  # 璃奈ちゃんボードから受け取ったときはその名前
 
 
 class UsageClient:
@@ -324,8 +325,47 @@ class UsageClient:
         return cls._request(cls.ENDPOINT, headers={"Authorization": "Bearer " + token,
                                                    "anthropic-beta": "oauth-2025-04-20"})
 
+    # 璃奈ちゃんボード（同じ PC で動く利用状況ダッシュボード）が起動していれば、そこが取得した応答を受け取る。
+    # 両方がそれぞれ取得すると取得回数の上限（HTTP 429）に達しやすいため。起動していなければ自分で取得する。
+    RINA_URL = "http://127.0.0.1:8765/api/limits/shared"
+
+    @classmethod
+    def _from_rina(cls):
+        """璃奈ちゃんボードから受け取った UsageResult。起動していない・応答がおかしいときは None"""
+        try:
+            req = urllib.request.Request(cls.RINA_URL, headers={"Accept": "application/json",
+                                                                "User-Agent": cls.USER_AGENT})
+            # 127.0.0.1 宛てなのでプロキシを通さない
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(req, timeout=20) as resp:
+                d = json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            return None
+        if not isinstance(d, dict) or d.get("app") != "rina-chan-board":
+            return None
+        r = UsageResult()
+        r.source = "璃奈ちゃんボード"
+        raw = d.get("raw")
+        if isinstance(raw, dict):
+            try:
+                r.raw_body = json.dumps(raw, ensure_ascii=False)
+                cls._parse(r.raw_body, r)
+            except Exception as ex:
+                r.error = "取得失敗: " + str(ex)
+                return r
+            if d.get("fetchedAt"):
+                r.fetched_at = dt.datetime.fromtimestamp(float(d["fetchedAt"]))
+        if d.get("error"):
+            r.error = str(d["error"])
+        elif not isinstance(raw, dict):
+            return None
+        return r
+
     @classmethod
     def fetch(cls):
+        r = cls._from_rina()
+        if r is not None:
+            return r
         r = UsageResult()
         token, err = cls._get_access_token(False)
         if token is None:
@@ -1674,6 +1714,8 @@ class MeterApp:
             t += " Fable:%d%%" % round(self.last.weekly_fable.utilization)
         if self.settings.show_credits and self.last.credits.present:
             t += " 追加:%d%%" % round(self.last.credits.utilization)
+        if self.last.source:
+            t += "（%s経由）" % self.last.source
         self.tray.set_tip(t)
 
     # ---- スイープ ----

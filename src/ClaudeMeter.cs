@@ -161,6 +161,7 @@ namespace ClaudeMeter
         public string Error;
         public string RawBody;
         public DateTime FetchedAt;
+        public string Source; // 璃奈ちゃんボードから受け取ったときはその名前
     }
 
     static class UsageClient
@@ -332,8 +333,60 @@ namespace ClaudeMeter
                 return sr.ReadToEnd();
         }
 
+        // 璃奈ちゃんボード（同じ PC で動く利用状況ダッシュボード）が起動していれば、そこが取得した応答を受け取る。
+        // 両方がそれぞれ取得すると取得回数の上限（HTTP 429）に達しやすいため。起動していなければ自分で取得する。
+        const string RinaUrl = "http://127.0.0.1:8765/api/limits/shared";
+
+        // 璃奈ちゃんボードから受け取った結果。起動していない・応答がおかしいときは null
+        static UsageResult FromRina()
+        {
+            Dictionary<string, object> d;
+            try
+            {
+                var req = (HttpWebRequest)WebRequest.Create(RinaUrl);
+                req.Method = "GET";
+                req.Timeout = 20000;
+                req.Accept = "application/json";
+                req.UserAgent = "ClaudeMeter/1.0";
+                req.Proxy = null; // 127.0.0.1 宛てなのでプロキシを通さない
+                using (var resp = (HttpWebResponse)req.GetResponse())
+                using (var sr = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
+                    d = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(sr.ReadToEnd());
+            }
+            catch { return null; }
+            object v;
+            if (d == null || !d.TryGetValue("app", out v) || Convert.ToString(v) != "rina-chan-board") return null;
+
+            var r = new UsageResult { FetchedAt = DateTime.Now, Source = "璃奈ちゃんボード" };
+            object rawObj;
+            var raw = d.TryGetValue("raw", out rawObj) ? rawObj as Dictionary<string, object> : null;
+            object err;
+            string error = d.TryGetValue("error", out err) && err != null ? Convert.ToString(err) : null;
+            if (raw != null)
+            {
+                try
+                {
+                    r.RawBody = new JavaScriptSerializer().Serialize(raw);
+                    Parse(r.RawBody, r);
+                    object at;
+                    if (d.TryGetValue("fetchedAt", out at) && at != null)
+                        r.FetchedAt = DateTimeOffset.FromUnixTimeMilliseconds((long)(Convert.ToDouble(at) * 1000)).LocalDateTime;
+                }
+                catch (Exception ex)
+                {
+                    r.Error = "取得失敗: " + ex.Message;
+                    return r;
+                }
+            }
+            else if (string.IsNullOrEmpty(error)) return null;
+            if (!string.IsNullOrEmpty(error)) r.Error = error;
+            return r;
+        }
+
         static UsageResult Fetch()
         {
+            var fromRina = FromRina();
+            if (fromRina != null) return fromRina;
             var r = new UsageResult { FetchedAt = DateTime.Now };
             string err;
             var token = GetAccessToken(false, out err);
@@ -1404,7 +1457,7 @@ namespace ClaudeMeter
         void UpdateTrayText()
         {
             if (last == null) return;
-            var sb = new StringBuilder("Claude");
+            var sb = new StringBuilder(last.Source != null ? "Claude(璃奈経由)" : "Claude");
             if (last.FiveHour.Present) sb.Append(" 5h:" + Math.Round(last.FiveHour.Utilization) + "%");
             if (last.Weekly.Present) sb.Append(" 週:" + Math.Round(last.Weekly.Utilization) + "%");
             if (settings.ShowFable && last.WeeklyFable.Present) sb.Append(" Fable:" + Math.Round(last.WeeklyFable.Utilization) + "%");
